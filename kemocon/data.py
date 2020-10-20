@@ -13,12 +13,11 @@ from torch.utils.data import TensorDataset, random_split, DataLoader
 
 class KEMOCONDataModule(pl.LightningDataModule):
 
-    def __init__(self, seed, data_dir, batch_size, label_type, n_classes, test_id, val_size, resample=False, standardize=False, fusion=None, label_fn=None):
+    def __init__(self, data_dir, batch_size, label_type, n_classes, test_id, val_size, resample=False, standardize=False, fusion=None, label_fn=None):
         super().__init__()
         assert label_type in {'self', 'partner', 'external'}, f'label_type must be one of "self", "partner", and "external", but given "{label_type}".'
         # assert fusion is None or fusion in {'stack', 'decision', 'autoencoder'}, f'fusion must be one of "feature", "decision", and "autoencoder", but given "{fusion}".'
 
-        self.seed           = seed
         self.data_dir       = os.path.expanduser(data_dir)
         self.batch_size     = batch_size
         self.label_type     = label_type
@@ -113,17 +112,17 @@ class KEMOCONDataModule(pl.LightningDataModule):
 
         if stage == 'test' or stage is None:
             inp, tgt = zip(*[(seg, label) for _, seg, label in data[self.test_id]])
-            self.kemocon_test = TensorDataset(torch.stack(inp), torch.Tensor(tgt))
+            self.kemocon_test = TensorDataset(torch.stack(inp), torch.Tensor(tgt).unsqueeze(1))
             self.dims = tuple(self.kemocon_test[0][0].shape)
 
         if stage == 'fit' or stage is None:
             inp, tgt = zip(*[(seg, label) for pid in data if pid != self.test_id for _, seg, label in data[pid]])
-            kemocon_full = TensorDataset(torch.stack(inp), torch.Tensor(tgt))
+            kemocon_full = TensorDataset(torch.stack(inp), torch.Tensor(tgt).unsqueeze(1))
             n_val = int(self.val_size * len(kemocon_full))
             self.kemocon_train, self.kemocon_val = random_split(
                 dataset=kemocon_full,
                 lengths=[len(kemocon_full) - n_val, n_val],
-                generator=torch.Generator().manual_seed(self.seed)
+                generator=torch.Generator()
             )
             self.dims = tuple(self.kemocon_train[0][0].shape)
 
@@ -157,6 +156,8 @@ if __name__ == "__main__":
         fusion      = 'stack',
         label_fn    = valence_binary,
         test_id     = 1,
-        seed        = 1,
         val_size    = 0.1,
     )
+
+    dm.setup('fit')
+    print(len(dm.kemocon_train.dataset))

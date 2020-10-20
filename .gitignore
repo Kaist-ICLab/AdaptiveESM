@@ -33,5 +33,5 @@ notebooks/
 .pyc
 .vscode
 
-# PyTorch Lightning files
-lightning_logs/
+# logs
+logs/
