@@ -13,7 +13,7 @@ from torch.utils.data import TensorDataset, random_split, DataLoader
 
 class KEMOCONDataModule(pl.LightningDataModule):
 
-    def __init__(self, data_dir, batch_size, label_type, n_classes, test_id, val_size, resample=False, standardize=False, fusion=None, label_fn=None):
+    def __init__(self, data_dir, batch_size, label_type, n_classes, val_size, resample=False, standardize=False, fusion=None, label_fn=None):
         super().__init__()
         assert label_type in {'self', 'partner', 'external'}, f'label_type must be one of "self", "partner", and "external", but given "{label_type}".'
         # assert fusion is None or fusion in {'stack', 'decision', 'autoencoder'}, f'fusion must be one of "feature", "decision", and "autoencoder", but given "{fusion}".'
@@ -22,13 +22,13 @@ class KEMOCONDataModule(pl.LightningDataModule):
         self.batch_size     = batch_size
         self.label_type     = label_type
         self.n_classes      = n_classes
-        self.test_id        = test_id
         self.val_size       = val_size
 
         self.resample       = resample
         self.standardize    = standardize
         self.fusion         = fusion
         self.label_fn       = label_fn
+        self.ids            = self.get_ids()
 
     def prepare_data(self):
         # Note: prepare_data is called from a single GPU. Do not use it to assign state (self.x = y)
@@ -105,18 +105,21 @@ class KEMOCONDataModule(pl.LightningDataModule):
         # return dict sorted by pid
         return OrderedDict(sorted(pid_to_segments.items(), key=lambda x: x[0]))
 
-    def setup(self, stage=None):
+    def get_ids(self):
+        return self.prepare_data().keys()
+
+    def setup(self, stage=None, test_id=1):
         # setup expects a string arg stage. It is used to separate setup logic for trainer.fit and trainer.test.
         # assign train/val split(s) for use in dataloaders
         data = self.prepare_data()
 
         if stage == 'test' or stage is None:
-            inp, tgt = zip(*[(seg, label) for _, seg, label in data[self.test_id]])
+            inp, tgt = zip(*[(seg, label) for _, seg, label in data[test_id]])
             self.kemocon_test = TensorDataset(torch.stack(inp), torch.Tensor(tgt).unsqueeze(1))
             self.dims = tuple(self.kemocon_test[0][0].shape)
 
         if stage == 'fit' or stage is None:
-            inp, tgt = zip(*[(seg, label) for pid in data if pid != self.test_id for _, seg, label in data[pid]])
+            inp, tgt = zip(*[(seg, label) for pid in data if pid != test_id for _, seg, label in data[pid]])
             kemocon_full = TensorDataset(torch.stack(inp), torch.Tensor(tgt).unsqueeze(1))
             n_val = int(self.val_size * len(kemocon_full))
             self.kemocon_train, self.kemocon_val = random_split(
@@ -134,30 +137,3 @@ class KEMOCONDataModule(pl.LightningDataModule):
 
     def test_dataloader(self):
         return DataLoader(self.kemocon_test, batch_size=self.batch_size)
-
-
-if __name__ == "__main__":
-
-    def arousal_binary(a, v):
-        return int(a > 2)
-
-
-    def valence_binary(a, v):
-        return int(v > 2)
-
-
-    dm = KEMOCONDataModule(
-        data_dir    = '~/data/kemocon/segments',
-        batch_size  = 100,
-        label_type  = 'self',
-        n_classes   = 2,
-        standardize = True,
-        resample    = True,
-        fusion      = 'stack',
-        label_fn    = valence_binary,
-        test_id     = 1,
-        val_size    = 0.1,
-    )
-
-    dm.setup('fit')
-    print(len(dm.kemocon_train.dataset))

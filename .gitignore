@@ -33,5 +33,6 @@ notebooks/
 .pyc
 .vscode
 
-# logs
+# logs and results
 logs/
+results/
