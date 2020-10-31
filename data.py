@@ -112,22 +112,45 @@ class KEMOCONDataModule(pl.LightningDataModule):
         # setup expects a string arg stage. It is used to separate setup logic for trainer.fit and trainer.test.
         # assign train/val split(s) for use in dataloaders
         data = self.prepare_data()
+        
+        # for loso cross-validation
+        if test_id is not None:
+            if stage == 'test' or stage is None:
+                inp, tgt = zip(*[(seg, label) for _, seg, label in data[test_id]])
+                self.kemocon_test = TensorDataset(torch.stack(inp), torch.Tensor(tgt).unsqueeze(1))
+                self.dims = tuple(self.kemocon_test[0][0].shape)
 
-        if stage == 'test' or stage is None:
-            inp, tgt = zip(*[(seg, label) for _, seg, label in data[test_id]])
-            self.kemocon_test = TensorDataset(torch.stack(inp), torch.Tensor(tgt).unsqueeze(1))
-            self.dims = tuple(self.kemocon_test[0][0].shape)
-
-        if stage == 'fit' or stage is None:
-            inp, tgt = zip(*[(seg, label) for pid in data if pid != test_id for _, seg, label in data[pid]])
+            if stage == 'fit' or stage is None:
+                inp, tgt = zip(*[(seg, label) for pid in data if pid != test_id for _, seg, label in data[pid]])
+                kemocon_full = TensorDataset(torch.stack(inp), torch.Tensor(tgt).unsqueeze(1))
+                n_val = int(self.val_size * len(kemocon_full))
+                self.kemocon_train, self.kemocon_val = random_split(
+                    dataset     = kemocon_full,
+                    lengths     = [len(kemocon_full) - n_val, n_val],
+                    generator   = torch.Generator(),
+                )
+                self.dims = tuple(self.kemocon_train[0][0].shape)
+        
+        # test id is None, we are doing standard train/valid/test split
+        # given val_size which is a float between 0 and 1 defining the proportion of validation set
+        # validation and test sets will have the same size of val_size * full dataset, and train set will be the rest of the data
+        else:
+            inp, tgt = zip(*[(seg, label) for pid in data for _, seg, label in data[pid]])
             kemocon_full = TensorDataset(torch.stack(inp), torch.Tensor(tgt).unsqueeze(1))
             n_val = int(self.val_size * len(kemocon_full))
-            self.kemocon_train, self.kemocon_val = random_split(
-                dataset=kemocon_full,
-                lengths=[len(kemocon_full) - n_val, n_val],
-                generator=torch.Generator()
+            train, valid, test = random_split(
+                dataset     = kemocon_full,
+                lengths     = [len(kemocon_full) - (n_val * 2), n_val, n_val],
+                generator   = torch.Generator(),
             )
-            self.dims = tuple(self.kemocon_train[0][0].shape)
+
+            if stage == 'fit' or stage is None:
+                self.kemocon_train, self.kemocon_val = train, valid
+                self.dims = tuple(self.kemocon_train[0][0].shape)
+            
+            if stage == 'test' or stage is None:
+                self.kemocon_test = test
+                self.dims = tuple(self.kemocon_test[0][0].shape)
 
     def train_dataloader(self):
         return DataLoader(self.kemocon_train, batch_size=self.batch_size)
