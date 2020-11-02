@@ -1,10 +1,16 @@
+# import system 
 import os
 import json
 import argparse
 import pandas as pd
-from ..data import KEMOCONDataModule
-from ..models.rnn import LSTM
+from collections import namedtuple
 
+# import custom modules
+from models import LSTM
+from data import KEMOCONDataModule
+from utils import get_config
+
+# import pytorch lightning related stuff
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -21,123 +27,110 @@ def transform_label(target, pos_label):
     return transform_fn
 
 
-def parse_config(config):
+def experiment_body(config, dm, pid=None):
+    # make logger
+    logger = TensorBoardLogger(
+        save_dir    = os.path.expanduser(config.exp.logdir),
+        name        = f'{config.exp.type}_{config.exp.name}_{config.exp.target}_{config.exp.pos_label}',
+        version     = None if pid is None else f'{pid:02d}',
+    )
+
+    # init LR monitor and callbacks
+    lr_monitor = LearningRateMonitor(logging_interval='epoch')
+    callbacks = [lr_monitor]
+
+    # define early stopping, see: https://pytorch-lightning.readthedocs.io/en/latest/early_stopping.html
+    if config.early_stop is not None:
+        early_stop_callback = EarlyStopping(
+            monitor     = config.early_stop.metric,
+            min_delta   = config.early_stop.min_delta,
+            patience    = config.early_stop.patience,
+            verbose     = config.early_stop.verbose,
+            mode        = config.early_stop.mode,
+        )
+        callbacks.append(early_stop_callback)
+
+    # make trainer
+    trainer_params = vars(config.trainer)
+    trainer_params.update({'logger': logger, 'callbacks': callbacks})
+    trainer = pl.Trainer(**trainer_params)
+
+    # make model
+    model = LSTM(config.hparams)
+
+    # find optimal LR, see: https://pytorch-lightning.readthedocs.io/en/latest/lr_finder.html#learning-rate-finder
+    if config.exp.tune:
+        trainer.tune(model, datamodule=dm)
+
+    # train model
+    dm.setup(stage='fit', test_id=pid)
+    trainer.fit(model, dm)
+
+    # test model
+    dm.setup(stage='test', test_id=pid)
+    trainer.test(model)
+
+    # get metrics and confusion matrix
+    metrics, cm = model.results
+    metrics.update({'num_epochs': model.current_epoch, 'pid': pid})
     
+    return metrics, cm
 
 
-def run_eval(config):
+def run_experiment(config):
     # set seed, see: https://pytorch-lightning.readthedocs.io/en/latest/trainer.html#reproducibility
-    seed_everything(seed)
+    seed_everything(config.exp.seed)
 
     # prepare data
     dm = KEMOCONDataModule(
-        data_dir    = '~/data/kemocon/segments',
-        batch_size  = 200,
-        label_type  = 'self',
-        n_classes   = 2,
-        val_size    = 0.2,
-        resample    = True,
-        standardize = True,
-        fusion      = 'stack',
-        label_fn    = transform_label(target, pos_label),
+        config      = config.data,
+        label_fn    = transform_label(config.exp.target, config.exp.pos_label),
     )
 
-    # print participant ids in the current datamodule
-    print(f'Running evaluation with data from participants: {dm.ids}')
+    # print experiment info: name and participant ids in the current datamodule
+    exp_name = f'{config.exp.type}_{config.exp.name}_{config.exp.target}_{config.exp.pos_label}'
+    print(f'Experiment: {exp_name} -- PIDs: {list(dm.ids)}')
 
-    if eval_type == 'kfold':
-        # make logger
-        logger = TensorBoardLogger(
-            save_dir    = os.path.expanduser('~/projects/AdaptiveESM/logs'),
-            name        = f'kfold_{name}_{target}_{pos_label}',
-        )
-        # init LR monitor
-        lr_
+    # create directory to save experiment results
+    savedir = os.path.expanduser(os.path.join(config.exp.savedir, exp_name))
+    os.makedirs(savedir, exist_ok=True)
 
+    if config.exp.type == 'kfold':
+        # run experiment and get metrics
+        metrics, cm = experiment_body(config, dm)
+        print(metrics)
+        print(cm)
 
-    if eval_type == 'loso':
+    if config.exp.type == 'loso':
         results, cms = list(), dict()
 
         # for each participant in datamodule
         for pid in dm.ids:
-            # make logger
-            logger = TensorBoardLogger(
-                save_dir    = os.path.expanduser('~/projects/AdaptiveESM/logs'),
-                name        = f'loso_{name}_{target}_{pos_label}',
-                version     = f'{pid:02d}'
-            )
-            # init LR monitor
-            lr_monitor = LearningRateMonitor(logging_interval='epoch')
-            # define early stopping, see: https://pytorch-lightning.readthedocs.io/en/latest/early_stopping.html
-            early_stop_callback = EarlyStopping(
-                monitor     = 'valid_loss',
-                min_delta   = 0.0,
-                patience    = 150,
-                verbose     = True,
-                mode        = 'min'
-            )
-            # make trainer
-            trainer = pl.Trainer(
-                gpus                = 1,
-                max_epochs          = 500,
-                auto_select_gpus    = True,
-                precision           = 16,
-                logger              = logger,
-                callbacks           = [lr_monitor, early_stop_callback],
-                auto_lr_find        = True,
-                gradient_clip_val   = 0.2,
-                deterministic       = True,
-            )
-            # make model
-            model = LSTM(
-                inp_size        = 4,
-                out_size        = 1,
-                hidden_size     = 128,
-                n_layers        = 2,
-                p_drop          = 0.2,
-                bidirectional   = True,
-                name            = name,
-                learning_rate   = 0.1,
-            )
-
-            # find optimal LR, see: https://pytorch-lightning.readthedocs.io/en/latest/lr_finder.html#learning-rate-finder
-            trainer.tune(model, datamodule=dm)
-
-            # train model
-            dm.setup(stage='fit', test_id=pid)
-            trainer.fit(model, dm)
-
-            # test model
-            dm.setup(stage='test', test_id=pid)
-            trainer.test(model)
-            
-            # get metrics and confusion matrix
-            metrics, cm = model.results
-            metrics['num_epochs'] = model.current_epoch
-            metrics['lr'] = model.hparams.learning_rate
-            metrics['pid'] = pid
+            # run experiment and get metrics
+            metrics, cm = experiment_body(config, dm, pid=pid)
             results.append(metrics)
 
             # save confusion matrix
             cms[pid] = cm.tolist()
-            print(f'### Confusion matrix for participant {pid} ###')
+            print(f'Confusion matrix for participant {pid}:')
             print(cm)
 
         # save metrics as csv
-        pd.DataFrame(results).set_index('pid').to_csv(os.path.expanduser(f'~/projects/AdaptiveESM/results/loso/{name}_{target}_{pos_label}_metrics.csv'))
+        pd.DataFrame(results).set_index('pid').to_csv(os.path.join(savedir, 'metrics.csv'))
 
         # pickle confusion matrices
-        with open(os.path.expanduser(f'~/projects/AdaptiveESM/results/loso/{name}_{target}_{pos_label}_confmat.json'), 'w') as f:
+        with open(os.path.join(savedir, 'confmat.json'), 'w') as f:
             json.dump(cms, f, sort_keys=True, indent=4)
 
 
 if __name__ == "__main__":
     # init parser
     parser = argparse.ArgumentParser()
-    parser.add_argument('-s', '--seed', type=int, default=1)
-    parser.add_argument('-n', '--name', type=str, default='default')
-    parser.add_argument('-t', '--target', type=str, default='arousal')
-    parser.add_argument('-p', '--pos', type=str, default='high')
+    parser.add_argument('--config', type=str, required=True, help='path to a configuration file for running an experiment')
     args = parser.parse_args()
 
-    run_loso_eval(args.seed, args.name, args.target, args.pos)
+    # load configurations as an object
+    config = get_config(args.config)
+
+    # run experiment with configuration
+    run_experiment(config)

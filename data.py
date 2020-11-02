@@ -13,20 +13,20 @@ from torch.utils.data import TensorDataset, random_split, DataLoader
 
 class KEMOCONDataModule(pl.LightningDataModule):
 
-    def __init__(self, data_dir, batch_size, label_type, n_classes, val_size, resample=False, standardize=False, fusion=None, label_fn=None):
+    def __init__(self, config, label_fn=None):
         super().__init__()
-        assert label_type in {'self', 'partner', 'external'}, f'label_type must be one of "self", "partner", and "external", but given "{label_type}".'
+        assert config.label_type in {'self', 'partner', 'external'}, f'label_type must be one of "self", "partner", and "external", but given "{config.label_type}".'
         # assert fusion is None or fusion in {'stack', 'decision', 'autoencoder'}, f'fusion must be one of "feature", "decision", and "autoencoder", but given "{fusion}".'
 
-        self.data_dir       = os.path.expanduser(data_dir)
-        self.batch_size     = batch_size
-        self.label_type     = label_type
-        self.n_classes      = n_classes
-        self.val_size       = val_size
+        self.data_dir       = os.path.expanduser(config.data_dir)
+        self.batch_size     = config.batch_size
+        self.label_type     = config.label_type
+        self.n_classes      = config.n_classes
+        self.val_size       = config.val_size
 
-        self.resample       = resample
-        self.standardize    = standardize
-        self.fusion         = fusion
+        self.resample       = config.resample
+        self.standardize    = config.standardize
+        self.fusion         = config.fusion
         self.label_fn       = label_fn
         self.ids            = self.get_ids()
 
@@ -108,7 +108,7 @@ class KEMOCONDataModule(pl.LightningDataModule):
     def get_ids(self):
         return self.prepare_data().keys()
 
-    def setup(self, stage=None, test_id=1):
+    def setup(self, stage=None, test_id=None):
         # setup expects a string arg stage. It is used to separate setup logic for trainer.fit and trainer.test.
         # assign train/val split(s) for use in dataloaders
         data = self.prepare_data()

@@ -1,0 +1,47 @@
+{
+    "exp": {
+        "seed": 1,
+        "name": "bilstm",
+        "type": "loso",
+        "target": "arousal",
+        "pos_label": "high",
+        "savedir": "~/projects/AdaptiveESM/results",
+        "logdir": "./logs"
+    },
+    "data": {
+        "data_dir": "~/data/kemocon/segments",
+        "batch_size": 200,
+        "label_type": "self",
+        "n_classes": 2,
+        "val_size": 0.2,
+        "resample": true,
+        "standardize": true,
+        "fusion": "stack"
+    },
+    "early_stop": {
+        "metric": "valid_loss",
+        "min_delta": 0.0,
+        "patience": 150,
+        "verbose": true,
+        "mode": "min"
+    },
+    "trainer": {
+        "gpus": 1,
+        "auto_select_gpus": true,
+        "precision": 16,
+        "deterministic": true,
+        "max_epochs": 1000,
+        "gradient_clip_val": 0.2,
+        "auto_lr_find": false,
+        "tune": false
+    },
+    "hparams": {
+        "inp_size": 4,
+        "out_size": 1,
+        "hidden_size": 128,
+        "n_layers": 2,
+        "p_drop": 0.2,
+        "bidirectional": true,
+        "learning_rate": 0.1
+    }
+}

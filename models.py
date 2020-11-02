@@ -10,19 +10,27 @@ from torch.utils.data import DataLoader, random_split
 
 from sklearn.metrics import accuracy_score, average_precision_score, f1_score, roc_auc_score, confusion_matrix
 
-
+# inp_size, out_size, hidden_size, n_layers, p_drop=0.0, bidirectional=False, learning_rate=1e-3, name='default'
 class LSTM(pl.LightningModule):
 
-    def __init__(self, inp_size, out_size, hidden_size, n_layers, p_drop=0.0, bidirectional=False, learning_rate=1e-3, name='default'):
+    def __init__(self, hparams):
         super().__init__()
-        self.save_hyperparameters()
+        # save hyperparameters, anything assigned to self.hparams will be saved automatically
+        self.hparams = hparams
 
-        self.lstm = nn.LSTM(inp_size, hidden_size, n_layers, dropout=p_drop, batch_first=True, bidirectional=bidirectional)
-
-        if bidirectional is True:
-            self.fc = nn.Linear(hidden_size * 2, out_size)
+        # define LSTM and fully-connected layer
+        self.lstm = nn.LSTM(
+            input_size      = hparams.inp_size,
+            hidden_size     = hparams.hidden_size,
+            num_layers      = hparams.n_layers,
+            dropout         = hparams.p_drop,
+            bidirectional   = hparams.bidirectional,
+            batch_first     = True
+        )
+        if hparams.bidirectional is True:
+            self.fc = nn.Linear(hparams.hidden_size * 2, hparams.out_size)
         else:
-            self.fc = nn.Linear(hidden_size, out_size)
+            self.fc = nn.Linear(hparams.hidden_size, hparams.out_size)
 
     def forward(self, x):
         out, _ = self.lstm(x)
@@ -95,9 +103,13 @@ class LSTM(pl.LightningModule):
         self.results = outputs
 
     def configure_optimizers(self):
-        optimizer = torch.optim.SGD(self.parameters(), lr=self.hparams.learning_rate)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=1)
-        return [optimizer], [scheduler]
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+        
+        if self.hparams.lr_schedule:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=1)
+            return [optimizer], [scheduler]
+        else:
+            return optimizer
 
 
 class AttentionLSTM(pl.LightningModule):
