@@ -12,7 +12,7 @@ from torch.utils.data import TensorDataset, random_split, DataLoader
 
 
 class KEMOCONDataModule(pl.LightningDataModule):
-
+    # data shape: [B, 20, 4]
     def __init__(self, config, label_fn=None):
         super().__init__()
         assert config.label_type in {'self', 'partner', 'external'}, f'label_type must be one of "self", "partner", and "external", but given "{config.label_type}".'
@@ -57,6 +57,8 @@ class KEMOCONDataModule(pl.LightningDataModule):
                 # transform labels using label_fn if given
                 if self.label_fn is not None:
                     label = self.label_fn(a, v)
+                else:
+                    label = (a, v)
 
                 # get signals
                 with open(os.path.join(pdir, segname)) as f:
