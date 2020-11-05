@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, random_split
 from sklearn.metrics import accuracy_score, average_precision_score, f1_score, roc_auc_score, confusion_matrix
 from utils import get_config
 
-# inp_size, out_size, hidden_size, n_layers, p_drop=0.0, bidirectional=False, learning_rate=1e-3, name='default'
+
 class LSTM(pl.LightningModule):
 
     def __init__(self, hparams):
@@ -269,15 +269,15 @@ class TransformerNet(pl.LightningModule):
         x, y = batch
         logits = self(x)
         loss = self.loss(logits, y)
-        acc, ap, f1, auroc, cm = self.log_metrics(loss, logits, y, stage='test')
-        return {'acc': acc, 'ap': ap, 'f1': f1, 'auroc': auroc}, cm
+        cm = self.log_metrics(loss, logits, y, stage='test')
+        return cm
 
     def test_epoch_end(self, outputs):
-        for metrics, cm in outputs:
-            pass
+        self.test_confmat = sum(outputs)
 
     def configure_optimizers(self):
-        pass
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+        return optimizer
 
     
 if __name__ == "__main__":

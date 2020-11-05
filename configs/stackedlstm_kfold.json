@@ -1,12 +1,15 @@
 {
+    "logger": {
+        "type": "tensorboard",
+        "logdir": "./logs"
+    },
     "exp": {
         "seed": 1,
-        "name": "stacked-adam",
+        "model": "stacked",
         "type": "kfold",
         "target": "arousal",
         "pos_label": "high",
         "savedir": "~/projects/AdaptiveESM/results",
-        "logdir": "./logs",
         "tune": true
     },
     "data": {

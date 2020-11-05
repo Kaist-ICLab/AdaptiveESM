@@ -8,12 +8,12 @@ from collections import namedtuple
 # import custom modules
 from utils import get_config
 from data import KEMOCONDataModule
-from models import LSTM, StackedLSTM
+from models import LSTM, StackedLSTM, TransformerNet
 
 # import pytorch lightning related stuff
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
-from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.loggers import TensorBoardLogger, CometLogger
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
@@ -27,13 +27,30 @@ def transform_label(target, pos_label):
     return transform_fn
 
 
+def get_logger(config, pid):
+    version = "" if pid is None else f'_{pid:02d}'
+
+    if config.logger.type == 'tensorboard':
+        logger = TensorBoardLogger(
+            save_dir    = os.path.expanduser(config.logger.logdir),
+            name        = f'{config.exp.model}_{config.exp.type}_{config.exp.target}_{config.exp.pos_label}{version}',
+        )
+    
+    elif config.logger.type == 'comet':
+        logger = CometLogger(
+            api_key         = os.environ.get(config.logger.api_key),
+            workspace       = os.environ.get(config.logger.workspace),
+            save_dir        = os.path.expanduser(config.logger.logdir),
+            project_name    = config.logger.project_name,
+            experiment_name = f'{config.exp.model}_{config.exp.type}_{config.exp.target}_{config.exp.pos_label}{version}'
+        )
+
+    return logger
+
+
 def experiment_body(config, dm, pid=None):
     # make logger
-    logger = TensorBoardLogger(
-        save_dir    = os.path.expanduser(config.exp.logdir),
-        name        = f'{config.exp.model}_{config.exp.type}_{config.exp.target}_{config.exp.pos_label}',
-        version     = None if pid is None else f'{pid:02d}',
-    )
+    logger = get_logger(config, pid)
 
     # init LR monitor and callbacks
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
@@ -60,6 +77,8 @@ def experiment_body(config, dm, pid=None):
         model = LSTM(config.hparams)
     elif config.exp.model == 'stacked':
         model = StackedLSTM(config.hparams)
+    elif config.exp.model == 'transformer':
+        model = TransformerNet(config.hparams)
 
     # find optimal LR, see: https://pytorch-lightning.readthedocs.io/en/latest/lr_finder.html#learning-rate-finder
     if config.exp.tune:

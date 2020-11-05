@@ -1,4 +1,11 @@
-{
+{   
+    "logger": {
+        "type": "tensorboard",
+        "api_key": null,
+        "workspace": "cheulyop",
+        "logdir": "./logs",
+        "project_name": "adaptiveesm"
+    },
     "exp": {
         "seed": 1,
         "model": "bilstm",
@@ -6,12 +13,11 @@
         "target": "arousal",
         "pos_label": "high",
         "savedir": "~/projects/AdaptiveESM/results",
-        "logdir": "./logs",
-        "tune": true
+        "tune": false
     },
     "data": {
         "data_dir": "~/data/kemocon/segments",
-        "batch_size": 500,
+        "batch_size": 2000,
         "label_type": "self",
         "n_classes": 2,
         "val_size": 0.2,
@@ -22,7 +28,7 @@
     "early_stop": {
         "metric": "valid_loss",
         "min_delta": 0.0,
-        "patience": 25,
+        "patience": 100,
         "verbose": true,
         "mode": "min"
     },
@@ -33,15 +39,15 @@
         "deterministic": true,
         "max_epochs": 1000,
         "gradient_clip_val": 0.2,
-        "auto_lr_find": true
+        "auto_lr_find": false
     },
     "hparams": {
         "inp_size": 4,
         "out_size": 1,
-        "hidden_size": 100,
+        "hidden_size": 256,
         "n_layers": 2,
         "p_drop": 0.2,
         "bidirectional": true,
-        "learning_rate": 0.0001
+        "learning_rate": 0.005
     }
 }
