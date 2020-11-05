@@ -6,9 +6,9 @@ import pandas as pd
 from collections import namedtuple
 
 # import custom modules
-from models import LSTM
-from data import KEMOCONDataModule
 from utils import get_config
+from data import KEMOCONDataModule
+from models import LSTM, StackedLSTM
 
 # import pytorch lightning related stuff
 import pytorch_lightning as pl
@@ -31,7 +31,7 @@ def experiment_body(config, dm, pid=None):
     # make logger
     logger = TensorBoardLogger(
         save_dir    = os.path.expanduser(config.exp.logdir),
-        name        = f'{config.exp.type}_{config.exp.name}_{config.exp.target}_{config.exp.pos_label}',
+        name        = f'{config.exp.model}_{config.exp.type}_{config.exp.target}_{config.exp.pos_label}',
         version     = None if pid is None else f'{pid:02d}',
     )
 
@@ -56,7 +56,10 @@ def experiment_body(config, dm, pid=None):
     trainer = pl.Trainer(**trainer_params)
 
     # make model
-    model = LSTM(config.hparams)
+    if config.exp.model == 'bilstm':
+        model = LSTM(config.hparams)
+    elif config.exp.model == 'stacked':
+        model = StackedLSTM(config.hparams)
 
     # find optimal LR, see: https://pytorch-lightning.readthedocs.io/en/latest/lr_finder.html#learning-rate-finder
     if config.exp.tune:
@@ -68,13 +71,18 @@ def experiment_body(config, dm, pid=None):
 
     # test model
     dm.setup(stage='test', test_id=pid)
-    trainer.test(model)
+    results = trainer.test(model)[0]
 
-    # get metrics and confusion matrix
-    metrics, cm = model.results
-    metrics.update({'num_epochs': model.current_epoch, 'pid': pid})
-    
-    return metrics, cm
+    # return metrics and confusion matrix
+    metrics = {
+        'pid': pid,
+        'acc': results['test_acc'],
+        'ap': results['test_ap'],
+        'f1': results['test_f1'],
+        'auroc': results['test_auroc'],
+        'num_epochs': model.current_epoch,
+    }
+    return metrics, model.test_confmat
 
 
 def run_experiment(config):
@@ -88,18 +96,22 @@ def run_experiment(config):
     )
 
     # print experiment info: name and participant ids in the current datamodule
-    exp_name = f'{config.exp.type}_{config.exp.name}_{config.exp.target}_{config.exp.pos_label}'
-    print(f'Experiment: {exp_name} -- PIDs: {list(dm.ids)}')
+    exp_name = f'{config.exp.model}_{config.exp.type}_{config.exp.target}_{config.exp.pos_label}'
+    print(f'Experiment: {exp_name}, w/ participants: {list(dm.ids)}')
 
     # create directory to save experiment results
     savedir = os.path.expanduser(os.path.join(config.exp.savedir, exp_name))
     os.makedirs(savedir, exist_ok=True)
 
+    # body for k-fold cross validation
     if config.exp.type == 'kfold':
         # run experiment and get metrics
         metrics, cm = experiment_body(config, dm)
-        print(metrics)
         print(cm)
+
+        # save experiment results
+        with open(os.path.join(savedir, 'results.json'), 'w') as f:
+            json.dump({'metrics': metrics, 'confmat': cm.tolist()}, f, indent=4)
 
     if config.exp.type == 'loso':
         results, cms = list(), dict()
@@ -112,13 +124,12 @@ def run_experiment(config):
 
             # save confusion matrix
             cms[pid] = cm.tolist()
-            print(f'Confusion matrix for participant {pid}:')
             print(cm)
 
         # save metrics as csv
         pd.DataFrame(results).set_index('pid').to_csv(os.path.join(savedir, 'metrics.csv'))
 
-        # pickle confusion matrices
+        # save confusion matrices
         with open(os.path.join(savedir, 'confmat.json'), 'w') as f:
             json.dump(cms, f, sort_keys=True, indent=4)
 

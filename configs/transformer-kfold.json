@@ -1,17 +1,17 @@
 {
     "exp": {
         "seed": 1,
-        "model": "bilstm",
+        "model": "transfomer",
         "type": "kfold",
         "target": "arousal",
         "pos_label": "high",
         "savedir": "~/projects/AdaptiveESM/results",
         "logdir": "./logs",
-        "tune": true
+        "tune": false
     },
     "data": {
         "data_dir": "~/data/kemocon/segments",
-        "batch_size": 500,
+        "batch_size": 100,
         "label_type": "self",
         "n_classes": 2,
         "val_size": 0.2,
@@ -22,7 +22,7 @@
     "early_stop": {
         "metric": "valid_loss",
         "min_delta": 0.0,
-        "patience": 25,
+        "patience": 50,
         "verbose": true,
         "mode": "min"
     },
@@ -33,15 +33,17 @@
         "deterministic": true,
         "max_epochs": 1000,
         "gradient_clip_val": 0.2,
-        "auto_lr_find": true
+        "auto_lr_find": false
     },
     "hparams": {
-        "inp_size": 4,
+        "d_model": 4,
+        "max_len": 20,
+        "nhead": 4,
+        "dim_feedforward": 2048,
+        "dropout": 0.1,
+        "num_layers": 6,
         "out_size": 1,
-        "hidden_size": 100,
-        "n_layers": 2,
-        "p_drop": 0.2,
-        "bidirectional": true,
-        "learning_rate": 0.0001
+        "batch_first": true,
+        "learning_rate": 0.1
     }
 }
