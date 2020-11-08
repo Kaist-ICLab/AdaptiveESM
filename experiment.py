@@ -3,11 +3,12 @@ import os
 import json
 import argparse
 import pandas as pd
-from collections import namedtuple
+from typing import Dict
+from argparse import Namespace
 
 # import custom modules
-from utils import get_config
 from data import KEMOCONDataModule
+from utils import get_config, transform_label
 from models import LSTM, StackedLSTM, TransformerNet
 
 # import pytorch lightning related stuff
@@ -18,139 +19,131 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 
-def transform_label(target, pos_label):
-
-    def transform_fn(a, v):
-        label = a if target == 'arousal' else v
-        return int(label > 2) if pos_label == 'high' else int(label <= 2)
-
-    return transform_fn
-
-
-def get_logger(config, pid):
-    version = "" if pid is None else f'_{pid:02d}'
-
-    if config.logger.type == 'tensorboard':
-        logger = TensorBoardLogger(
-            save_dir    = os.path.expanduser(config.logger.logdir),
-            name        = f'{config.exp.model}_{config.exp.type}_{config.exp.target}_{config.exp.pos_label}{version}',
-        )
+class Experiment(object):
     
-    elif config.logger.type == 'comet':
-        logger = CometLogger(
-            api_key         = os.environ.get(config.logger.api_key),
-            workspace       = os.environ.get(config.logger.workspace),
-            save_dir        = os.path.expanduser(config.logger.logdir),
-            project_name    = config.logger.project_name,
-            experiment_name = f'{config.exp.model}_{config.exp.type}_{config.exp.target}_{config.exp.pos_label}{version}'
+    def __init__(self, config: str) -> None:
+        # get configurations
+        self.config = get_config(config)
+        
+        # set seed
+        seed_everything(self.config.exp.seed)
+
+        # prepare data
+        self.dm = KEMOCONDataModule(
+            config      = self.config.data,
+            label_fn    = transform_label(self.config.exp.target, self.config.exp.pos_label),
         )
 
-    return logger
+        # get experiment name
+        exp_name = f'{self.config.exp.model}_{self.config.exp.type}_{self.config.exp.target}_{self.config.exp.pos_label}'
+        print(f'Experiment: {exp_name}, w/ participants: {list(self.dm.ids)}')
 
+        # make directory to save experiment results
+        self.savedir = os.path.expanduser(os.path.join(self.config.exp.savedir, exp_name))
+        os.makedirs(self.savedir, exist_ok=True)
 
-def experiment_body(config, dm, pid=None):
-    # make logger
-    logger = get_logger(config, pid)
+    def get_logger(self, pid):
+        # set version number if needed
+        version = "" if pid is None else f'_{pid:02d}'
 
-    # init LR monitor and callbacks
-    lr_monitor = LearningRateMonitor(logging_interval='epoch')
-    callbacks = [lr_monitor]
+        # make logger
+        if self.config.logger.type == 'tensorboard':
+            logger = TensorBoardLogger(
+                save_dir    = os.path.expanduser(self.config.logger.logdir),
+                name        = f'{self.config.exp.model}_{self.config.exp.type}_{self.config.exp.target}_{self.config.exp.pos_label}{version}',
+            )
+        
+        elif self.config.logger.type == 'comet':
+            logger = CometLogger(
+                api_key         = os.environ.get(self.config.logger.api_key),
+                workspace       = os.environ.get(self.config.logger.workspace),
+                save_dir        = os.path.expanduser(self.config.logger.logdir),
+                project_name    = self.config.logger.project_name,
+                experiment_name = f'{self.config.exp.model}_{self.config.exp.type}_{self.config.exp.target}_{self.config.exp.pos_label}{version}'
+            )
 
-    # define early stopping, see: https://pytorch-lightning.readthedocs.io/en/latest/early_stopping.html
-    if config.early_stop is not None:
-        early_stop_callback = EarlyStopping(
-            monitor     = config.early_stop.metric,
-            min_delta   = config.early_stop.min_delta,
-            patience    = config.early_stop.patience,
-            verbose     = config.early_stop.verbose,
-            mode        = config.early_stop.mode,
-        )
-        callbacks.append(early_stop_callback)
+        return logger
 
-    # make trainer
-    trainer_params = vars(config.trainer)
-    trainer_params.update({'logger': logger, 'callbacks': callbacks})
-    trainer = pl.Trainer(**trainer_params)
+    def _body(self, pid=None):
+        # get logger
+        self.logger = self.get_logger(pid)
 
-    # make model
-    if config.exp.model == 'bilstm':
-        model = LSTM(config.hparams)
-    elif config.exp.model == 'stacked':
-        model = StackedLSTM(config.hparams)
-    elif config.exp.model == 'transformer':
-        model = TransformerNet(config.hparams)
+        # init lr monitor and callbacks
+        self.callbacks = list()
+        if self.config.hparams.scheduler is not None:
+            self.callbacks.append(LearningRateMonitor(logging_interval='epoch'))
 
-    # find optimal LR, see: https://pytorch-lightning.readthedocs.io/en/latest/lr_finder.html#learning-rate-finder
-    if config.exp.tune:
-        trainer.tune(model, datamodule=dm)
+        # init early stopping
+        if self.config.early_stop is not None:
+            self.callbacks.append(EarlyStopping(**vars(self.config.early_stop)))
 
-    # train model
-    dm.setup(stage='fit', test_id=pid)
-    trainer.fit(model, dm)
+        # make model
+        if self.config.exp.model == 'lstm':
+            self.model = LSTM(self.config.hparams)
+        elif self.config.exp.model == 'stacked_lstm':
+            self.model = StackedLSTM(self.config.hparams)
+        elif self.config.exp.model == 'transformer':
+            self.model = TransformerNet(self.config.hparams)
 
-    # test model
-    dm.setup(stage='test', test_id=pid)
-    results = trainer.test(model)[0]
+        # make trainer
+        trainer_args = vars(self.config.trainer)
+        trainer_args.update({
+            'logger': self.logger,
+            'callbacks': self.callbacks,
+            'auto_lr_find': True if self.config.exp.tune else False
+        })
+        self.trainer = pl.Trainer(**trainer_args)
 
-    # return metrics and confusion matrix
-    metrics = {
-        'pid': pid,
-        'acc': results['test_acc'],
-        'ap': results['test_ap'],
-        'f1': results['test_f1'],
-        'auroc': results['test_auroc'],
-        'num_epochs': model.current_epoch,
-    }
-    return metrics, model.test_confmat
+        # find optimal lr
+        if self.config.exp.tune:
+            self.trainer.tune(self.model, datamodule=self.dm)
+        
+        # train model
+        self.dm.setup(stage='fit', test_id=pid)
+        self.trainer.fit(self.model, self.dm)
 
+        # test model and get results
+        self.dm.setup(stage='test', test_id=pid)
+        results = self.trainer.test(self.model)[0]
 
-def run_experiment(config):
-    # set seed, see: https://pytorch-lightning.readthedocs.io/en/latest/trainer.html#reproducibility
-    seed_everything(config.exp.seed)
+        # return metrics and confusion matrix
+        metrics = {
+            'pid': pid,
+            'acc': results['test_acc'],
+            'ap': results['test_ap'],
+            'f1': results['test_f1'],
+            'auroc': results['test_auroc'],
+            'num_epochs': self.model.current_epoch,
+        }
+        return metrics, self.model.test_confmat
 
-    # prepare data
-    dm = KEMOCONDataModule(
-        config      = config.data,
-        label_fn    = transform_label(config.exp.target, config.exp.pos_label),
-    )
-
-    # print experiment info: name and participant ids in the current datamodule
-    exp_name = f'{config.exp.model}_{config.exp.type}_{config.exp.target}_{config.exp.pos_label}'
-    print(f'Experiment: {exp_name}, w/ participants: {list(dm.ids)}')
-
-    # create directory to save experiment results
-    savedir = os.path.expanduser(os.path.join(config.exp.savedir, exp_name))
-    os.makedirs(savedir, exist_ok=True)
-
-    # body for k-fold cross validation
-    if config.exp.type == 'kfold':
-        # run experiment and get metrics
-        metrics, cm = experiment_body(config, dm)
-        print(cm)
-
-        # save experiment results
-        with open(os.path.join(savedir, 'results.json'), 'w') as f:
-            json.dump({'metrics': metrics, 'confmat': cm.tolist()}, f, indent=4)
-
-    if config.exp.type == 'loso':
-        results, cms = list(), dict()
-
-        # for each participant in datamodule
-        for pid in dm.ids:
-            # run experiment and get metrics
-            metrics, cm = experiment_body(config, dm, pid=pid)
-            results.append(metrics)
-
-            # save confusion matrix
-            cms[pid] = cm.tolist()
+    def run(self) -> None:
+        # run k-fold cv
+        if self.config.exp.type == 'kfold':
+            metrics, cm = self._body()
             print(cm)
 
-        # save metrics as csv
-        pd.DataFrame(results).set_index('pid').to_csv(os.path.join(savedir, 'metrics.csv'))
+            # save results
+            with open(os.path.join(self.savedir, 'results.json'), 'w') as f:
+                json.dump({'metrics': metrics, 'confmat': cm.tolist()}, f, indent=4)
 
-        # save confusion matrices
-        with open(os.path.join(savedir, 'confmat.json'), 'w') as f:
-            json.dump(cms, f, sort_keys=True, indent=4)
+        if self.config.exp.type == 'loso':
+            results, confmats = list(), dict()
+
+            # for each participant
+            for pid in self.dm.ids:
+                # run loso cv and get results
+                metrics, cm = self._body(pid=pid)
+                results.append(metrics)
+                confmats[pid] = cm.tolist()
+                print(cm)
+
+            # save metrics as csv
+            pd.DataFrame(results).set_index('pid').to_csv(os.path.join(self.savedir, 'metrics.csv'))
+
+            # save confusion matrices
+            with open(os.path.join(self.savedir, 'confmat.json'), 'w') as f:
+                json.dump(confmats, f, sort_keys=True, inden=4)
 
 
 if __name__ == "__main__":
@@ -159,8 +152,6 @@ if __name__ == "__main__":
     parser.add_argument('--config', type=str, required=True, help='path to a configuration file for running an experiment')
     args = parser.parse_args()
 
-    # load configurations as an object
-    config = get_config(args.config)
-
     # run experiment with configuration
-    run_experiment(config)
+    exp = Experiment(args.config)
+    exp.run()
