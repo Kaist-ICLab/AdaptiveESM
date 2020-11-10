@@ -1,11 +1,14 @@
-{
+{   
     "logger": {
         "type": "tensorboard",
-        "logdir": "./logs"
+        "api_key": null,
+        "workspace": "cheulyop",
+        "logdir": "./logs",
+        "project_name": "adaptiveesm"
     },
     "exp": {
         "seed": 1,
-        "model": "transformer",
+        "model": "lstm",
         "type": "kfold",
         "target": "arousal",
         "pos_label": "high",
@@ -18,14 +21,16 @@
         "label_type": "self",
         "n_classes": 2,
         "val_size": 0.2,
+        "num_segs": 12,
         "resample": true,
+        "extract_features": false,
         "standardize": true,
         "fusion": "stack"
     },
     "early_stop": {
-        "metric": "valid_loss",
+        "monitor": "valid_loss",
         "min_delta": 0.0,
-        "patience": 100,
+        "patience": 500,
         "verbose": true,
         "mode": "min"
     },
@@ -35,18 +40,16 @@
         "precision": 16,
         "deterministic": true,
         "max_epochs": 10000,
-        "gradient_clip_val": 0.2,
-        "auto_lr_find": false
+        "gradient_clip_val": 0.2
     },
     "hparams": {
-        "d_model": 4,
-        "max_len": 20,
-        "nhead": 4,
-        "dim_feedforward": 64,
-        "dropout": 0.2,
-        "num_layers": 6,
+        "inp_size": 4,
         "out_size": 1,
-        "batch_first": true,
-        "learning_rate": 3e-5
+        "hidden_size": 20,
+        "n_layers": 2,
+        "p_drop": 0.2,
+        "bidirectional": false,
+        "learning_rate": 0.1,
+        "scheduler": null
     }
 }

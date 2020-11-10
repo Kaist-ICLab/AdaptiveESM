@@ -8,9 +8,9 @@
     },
     "exp": {
         "seed": 1,
-        "model": "lstm",
+        "model": "xgboost",
         "type": "kfold",
-        "target": "arousal",
+        "target": "valence",
         "pos_label": "high",
         "savedir": "~/projects/AdaptiveESM/results",
         "tune": false
@@ -22,8 +22,8 @@
         "n_classes": 2,
         "val_size": 0.2,
         "num_segs": 5,
-        "resample": true,
-        "extract_features": false,
+        "resample": false,
+        "extract_features": true,
         "standardize": true,
         "fusion": "stack"
     },
@@ -43,13 +43,17 @@
         "gradient_clip_val": 0.2
     },
     "hparams": {
-        "inp_size": 4,
-        "out_size": 1,
-        "hidden_size": 256,
-        "n_layers": 2,
-        "p_drop": 0.2,
-        "bidirectional": true,
-        "learning_rate": 0.005,
-        "scheduler": null
+        "bst": {
+            "booster": "gbtree",
+            "verbosity": 1,
+            "learning_rate": 0.3,
+            "min_split_loss": 0,
+            "max_depth": 6,
+            "objective": "binary:logistic",
+            "eval_metric": "auc",
+            "seed": 1
+        },
+        "num_rounds": 100,
+        "threshold": 0.5
     }
 }

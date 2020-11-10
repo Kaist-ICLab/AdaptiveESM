@@ -1,5 +1,7 @@
 import os
 import numpy as np
+import xgboost as xgb
+from xgboost import DMatrix
 
 import torch
 import torch.nn.functional as F
@@ -280,9 +282,28 @@ class TransformerNet(pl.LightningModule):
         return optimizer
 
     
-if __name__ == "__main__":
-    inp = torch.randn((100, 20, 4))
-    config = get_config(os.path.expanduser('~/projects/AdaptiveESM/configs/transformer-kfold.json'))
-    model = TransformerNet(config.hparams)
+class XGBoost(object):
 
-    print(model(inp).shape)
+    def __init__(self, hparams):
+        self.hparams = hparams
+
+    def train(self, x, y):
+        self.dtrain = DMatrix(x, label=y)
+        self.bst = xgb.train(vars(self.hparams.bst), self.dtrain, self.hparams.num_rounds)
+
+    def predict(self, x):
+        probs = self.bst.predict(DMatrix(x))
+        preds = probs > self.hparams.threshold
+        return probs, preds
+
+    def test(self, x, y):
+        probs, preds = self.predict(x)
+
+        # get metrics
+        acc = accuracy_score(y, preds)
+        ap = average_precision_score(y, probs, average='weighted', pos_label=1)
+        f1 = f1_score(y, preds, average='weighted', pos_label=1)
+        auroc = roc_auc_score(y, probs, average='weighted')
+        cm = confusion_matrix(y, preds, normalize=None)
+
+        return {'acc': acc, 'ap': ap, 'f1': f1, 'auroc': auroc}, cm
