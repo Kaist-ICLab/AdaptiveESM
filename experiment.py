@@ -9,7 +9,7 @@ from argparse import Namespace
 
 # import custom modules
 from data import KEMOCONDataModule
-from utils import get_config, transform_label
+from utils import get_config, transform_label, config_to_dict
 from models import LSTM, StackedLSTM, TransformerNet, XGBoost
 
 # import pytorch related
@@ -29,7 +29,6 @@ class Experiment(object):
     def __init__(self, config: str) -> None:
         # get configurations
         self.config = get_config(config)
-        self.config_dict = {key: vars(value) for key, value in vars(self.config).items()}
         
         # set seed
         seed_everything(self.config.exp.seed)
@@ -153,7 +152,7 @@ class Experiment(object):
         if self.config.exp.type == 'kfold':
             metr, cm = self._body()
             results = {
-                'config': self.config_dict,
+                'config': config_to_dict(self.config),
                 'metrics': metr,
                 'confmats': cm.tolist()
             }
@@ -177,7 +176,7 @@ class Experiment(object):
 
             # make results dict
             results = {
-                'config': self.config_dict,
+                'config': config_to_dict(self.config),
                 'metrics': metrics,
                 'confmats': confmats
             }
@@ -186,13 +185,6 @@ class Experiment(object):
         # if self.config.exp.type == 'active':
         #     metrics, cm = self._active_body()
         #     print(cm)
-
-        # delete config items that cannot be serialized
-        try:
-            del results['config']['trainer']['logger']
-            del results['config']['trainer']['callbacks']
-        except:
-            pass
 
         # save results
         with open(self.savepath, 'w') as f:
