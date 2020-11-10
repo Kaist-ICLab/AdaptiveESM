@@ -187,9 +187,14 @@ class Experiment(object):
         #     metrics, cm = self._active_body()
         #     print(cm)
 
+        # delete config items that cannot be serialized
+        try:
+            del results['config']['trainer']['logger']
+            del results['config']['trainer']['callbacks']
+        except:
+            pass
+
         # save results
-        del results['config']['trainer']['logger']
-        del results['config']['trainer']['callbacks']
         with open(self.savepath, 'w') as f:
             json.dump(results, f, indent=4)
 
