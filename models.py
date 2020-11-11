@@ -98,17 +98,18 @@ class LSTM(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
-        
-        try:
-            if self.hparams.lr_scheduler == 'CosineAnnealingWarmRestarts':
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=1)
-                return [optimizer], [scheduler]
-                
-            elif self.hparams.lr_scheduler == 'ReduceLROnPlateau':
-                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, threshold=1e-5, verbose=True)
-                return {'optimizer': optimizer, 'scheduler': scheduler, 'monitor': 'valid_loss'}
 
-        except:
+        # configure learning rate scheduler if needed
+        if self.hparams.scheduler is not None:
+            if self.hparams.scheduler.type == 'CosineAnnealingWarmRestarts':
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, **vars(self.hparams.scheduler.params))
+                return [optimizer], [scheduler]
+
+            elif self.hparams.scheduler.type == 'ReduceLROnPlateau':
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **vars(self.hparams.scheduler.params))
+                return {'optimizer': optimizer, 'lr_scheduler': scheduler, 'monitor': 'valid_loss'}
+
+        else:
             return optimizer
 
 

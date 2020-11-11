@@ -49,7 +49,7 @@ class Experiment(object):
         # set path to save experiment results
         self.savepath = os.path.expanduser(os.path.join(self.config.exp.savedir, f'{exp_name}_{int(time.time())}.json'))
         
-    def get_logger(self, pid):
+    def init_logger(self, pid):
         # set version number if needed
         version = "" if pid is None else f'_{pid:02d}'
 
@@ -59,7 +59,6 @@ class Experiment(object):
                 save_dir    = os.path.expanduser(self.config.logger.logdir),
                 name        = f'{self.config.exp.model}_{self.config.exp.type}_{self.config.exp.target}_{self.config.exp.pos_label}{version}',
             )
-        
         elif self.config.logger.type == 'comet':
             logger = CometLogger(
                 api_key         = os.environ.get(self.config.logger.api_key),
@@ -68,68 +67,56 @@ class Experiment(object):
                 project_name    = self.config.logger.project_name,
                 experiment_name = f'{self.config.exp.model}_{self.config.exp.type}_{self.config.exp.target}_{self.config.exp.pos_label}{version}'
             )
-
         return logger
 
-    def _body(self, pid=None):
-        # separate body for xgboost
+    def init_model(self, hparams):
         if self.config.exp.model == 'xgboost':
-            self.model = XGBoost(self.config.hparams)
+            model = XGBoost(hparams)
+        elif self.config.exp.model == 'lstm':
+            model = LSTM(hparams)
+        elif self.config.exp.model == 'transformer':
+            model = TransformerNet(hparams)
+        return model
 
-            # setup datamodule
-            self.dm.setup(stage=None, test_id=pid)
+    def _body(self, pid=None):
+        # make model
+        self.model = self.init_model(self.config.hparams)
 
-            # train model: concat train and valid inputs and labels and convert torch tensors to numpy arrays
-            X_train, y_train = map(lambda x: torch.cat(x, dim=0).numpy(), zip(self.dm.kemocon_train[:], self.dm.kemocon_val[:]))
-            self.model.train(X_train, y_train)
+        # setup datamodule
+        self.dm.setup(stage=None, test_id=pid)
 
-            # test model
-            X_test, y_test = map(lambda x: x.numpy(), self.dm.kemocon_test[:])
-            metr, cm = self.model.test(X_test, y_test)
-            
-        else:
-            # get logger
-            self.logger = self.get_logger(pid)
+        # init training for pl.LightningModule models
+        if self.config.trainer is not None:
+            # init logger
+            if self.config.logger is not None:
+                logger = self.init_logger(pid)
 
             # init lr monitor and callbacks
-            self.callbacks = list()
+            callbacks = list()
             if self.config.hparams.scheduler is not None:
-                self.callbacks.append(LearningRateMonitor(logging_interval='epoch'))
+                callbacks.append(LearningRateMonitor(logging_interval='epoch'))
 
             # init early stopping
             if self.config.early_stop is not None:
-                self.callbacks.append(EarlyStopping(**vars(self.config.early_stop)))
+                callbacks.append(EarlyStopping(**vars(self.config.early_stop)))
 
-            # make model
-            if self.config.exp.model == 'lstm':
-                self.model = LSTM(self.config.hparams)
-            elif self.config.exp.model == 'stacked_lstm':
-                self.model = StackedLSTM(self.config.hparams)
-            elif self.config.exp.model == 'transformer':
-                self.model = TransformerNet(self.config.hparams)
-
-            # make trainer
             trainer_args = vars(self.config.trainer)
             trainer_args.update({
-                'logger': self.logger,
-                'callbacks': self.callbacks,
+                'logger': logger,
+                'callbacks': callbacks,
                 'auto_lr_find': True if self.config.exp.tune else False
             })
-            self.trainer = pl.Trainer(**trainer_args)
+            trainer = pl.Trainer(**trainer_args)
 
             # find optimal lr
             if self.config.exp.tune:
-                self.trainer.tune(self.model, datamodule=self.dm)
-            
-            # setup datamodule
-            self.dm.setup(stage=None, test_id=pid)
-            print(self.dm.dims)
+                trainer.tune(self.model, datamodule=self.dm)
 
             # train model
-            self.trainer.fit(self.model, self.dm)
+            trainer.fit(self.model, self.dm)
 
             # test model and get results
-            results = self.trainer.test(self.model)[0]
+            results = trainer.test(self.model)[0]
 
             # return metrics and confusion matrix
             metr = {
@@ -141,11 +128,20 @@ class Experiment(object):
                 'num_epochs': self.model.current_epoch,
             }
             cm = self.model.test_confmat
+        
+        else:
+            # train model: concat train and valid inputs and labels and convert torch tensors to numpy arrays
+            X_train, y_train = map(lambda x: torch.cat(x, dim=0).numpy(), zip(self.dm.kemocon_train[:], self.dm.kemocon_val[:]))
+            self.model.train(X_train, y_train)
+
+            # test model
+            X_test, y_test = map(lambda x: x.numpy(), self.dm.kemocon_test[:])
+            metr, cm = self.model.test(X_test, y_test)
 
         return metr, cm
 
-    def _active_body(self, pid=None):
-        pass
+    # def _active_body(self, pid=None):
+    #     self.model = self.init_model(self.config.hparams)
 
     def run(self) -> None:
         # run k-fold cv
