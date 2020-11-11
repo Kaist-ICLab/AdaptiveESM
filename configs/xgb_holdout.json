@@ -1,15 +1,8 @@
 {   
-    "logger": {
-        "type": "tensorboard",
-        "api_key": null,
-        "workspace": "cheulyop",
-        "logdir": "./logs",
-        "project_name": "adaptiveesm"
-    },
     "exp": {
         "seed": 1,
         "model": "xgboost",
-        "type": "kfold",
+        "type": "holdout",
         "target": "valence",
         "pos_label": "high",
         "savedir": "~/projects/AdaptiveESM/results",
@@ -27,21 +20,7 @@
         "standardize": true,
         "fusion": "stack"
     },
-    "early_stop": {
-        "monitor": "valid_loss",
-        "min_delta": 0.0,
-        "patience": 100,
-        "verbose": true,
-        "mode": "min"
-    },
-    "trainer": {
-        "gpus": 1,
-        "auto_select_gpus": true,
-        "precision": 16,
-        "deterministic": true,
-        "max_epochs": 1000,
-        "gradient_clip_val": 0.2
-    },
+    "trainer": null,
     "hparams": {
         "bst": {
             "booster": "gbtree",

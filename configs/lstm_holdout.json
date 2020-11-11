@@ -1,12 +1,15 @@
-{
+{   
     "logger": {
         "type": "tensorboard",
-        "logdir": "./logs"
+        "api_key": null,
+        "workspace": "cheulyop",
+        "logdir": "./logs",
+        "project_name": "adaptiveesm"
     },
     "exp": {
         "seed": 1,
-        "model": "transformer",
-        "type": "kfold",
+        "model": "lstm",
+        "type": "holdout",
         "target": "arousal",
         "pos_label": "high",
         "savedir": "~/projects/AdaptiveESM/results",
@@ -27,7 +30,7 @@
     "early_stop": {
         "monitor": "valid_loss",
         "min_delta": 0.0,
-        "patience": 100,
+        "patience": 500,
         "verbose": true,
         "mode": "min"
     },
@@ -37,19 +40,16 @@
         "precision": 16,
         "deterministic": true,
         "max_epochs": 10000,
-        "gradient_clip_val": 0.2,
-        "auto_lr_find": false
+        "gradient_clip_val": 0.2
     },
     "hparams": {
-        "d_model": 4,
-        "max_len": 240,
-        "nhead": 1,
-        "dim_feedforward": 20,
-        "dropout": 0.2,
-        "num_layers": 2,
+        "inp_size": 4,
         "out_size": 1,
-        "batch_first": true,
-        "learning_rate": 0.05,
+        "hidden_size": 40,
+        "n_layers": 2,
+        "p_drop": 0.2,
+        "bidirectional": true,
+        "learning_rate": 0.001,
         "scheduler": null
     }
 }

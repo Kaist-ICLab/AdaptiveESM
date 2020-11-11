@@ -9,7 +9,7 @@
     "exp": {
         "seed": 1,
         "model": "lstm",
-        "type": "kfold",
+        "type": "holdout",
         "target": "arousal",
         "pos_label": "high",
         "savedir": "~/projects/AdaptiveESM/results",
@@ -21,7 +21,7 @@
         "label_type": "self",
         "n_classes": 2,
         "val_size": 0.2,
-        "num_segs": 5,
+        "num_segs": 12,
         "resample": true,
         "extract_features": false,
         "standardize": true,
@@ -30,7 +30,7 @@
     "early_stop": {
         "monitor": "valid_loss",
         "min_delta": 0.0,
-        "patience": 100,
+        "patience": 500,
         "verbose": true,
         "mode": "min"
     },
@@ -39,17 +39,17 @@
         "auto_select_gpus": true,
         "precision": 16,
         "deterministic": true,
-        "max_epochs": 1000,
+        "max_epochs": 10000,
         "gradient_clip_val": 0.2
     },
     "hparams": {
         "inp_size": 4,
         "out_size": 1,
-        "hidden_size": 256,
+        "hidden_size": 40,
         "n_layers": 2,
         "p_drop": 0.2,
         "bidirectional": true,
-        "learning_rate": 0.005,
+        "learning_rate": 0.001,
         "scheduler": null
     }
 }
