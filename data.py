@@ -190,7 +190,7 @@ class KEMOCONDataModule(pl.LightningDataModule):
                 self.kemocon_train, self.kemocon_val = random_split(
                     dataset     = kemocon_full,
                     lengths     = [len(kemocon_full) - n_val, n_val],
-                    # generator   = torch.Generator(),
+                    generator   = torch.Generator(),
                 )
                 self.dims = tuple(self.kemocon_train[0][0].shape)
         
@@ -204,7 +204,7 @@ class KEMOCONDataModule(pl.LightningDataModule):
             train, valid, test = random_split(
                 dataset     = kemocon_full,
                 lengths     = [len(kemocon_full) - (n_val * 2), n_val, n_val],
-                # generator   = torch.Generator(),
+                generator   = torch.Generator(),
             )
 
             if stage == 'fit' or stage is None:

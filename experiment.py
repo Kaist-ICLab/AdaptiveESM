@@ -79,13 +79,13 @@ class Experiment(object):
         return model
 
     def _body(self, pid=None):
-        # make model
+        # init model
         self.model = self.init_model(self.config.hparams)
 
         # setup datamodule
         self.dm.setup(stage=None, test_id=pid)
 
-        # init training for pl.LightningModule models
+        # init training with pl.LightningModule models
         if self.config.trainer is not None:
             # init logger
             if self.config.logger is not None:
@@ -100,6 +100,7 @@ class Experiment(object):
             if self.config.early_stop is not None:
                 callbacks.append(EarlyStopping(**vars(self.config.early_stop)))
 
+            # make trainer
             trainer_args = vars(self.config.trainer)
             trainer_args.update({
                 'logger': logger,
@@ -140,12 +141,16 @@ class Experiment(object):
 
         return metr, cm
 
-    # def _active_body(self, pid=None):
+    # def _stream_body(self, pid=None):
+    #     # init model
     #     self.model = self.init_model(self.config.hparams)
 
+    #     # get full data
+    #     full_data = self.dm.prepare_data()
+
     def run(self) -> None:
-        # run k-fold cv
-        if self.config.exp.type == 'kfold':
+        # run holdout validation
+        if self.config.exp.type == 'holdout':
             metr, cm = self._body()
             results = {
                 'config': config_to_dict(self.config),
@@ -177,10 +182,9 @@ class Experiment(object):
                 'confmats': confmats
             }
 
-        # run active learning
-        # if self.config.exp.type == 'active':
-        #     metrics, cm = self._active_body()
-        #     print(cm)
+        # # run stream-based active learning (holdout)
+        # if self.config.exp.type == 'active-holdout':
+        #     self._stream_body()
 
         # save results
         with open(self.savepath, 'w') as f:
