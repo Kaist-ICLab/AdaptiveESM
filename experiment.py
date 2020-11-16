@@ -6,6 +6,7 @@ import argparse
 import pandas as pd
 from typing import Dict
 from argparse import Namespace
+from collections import Counter
 
 # import custom modules
 from data import KEMOCONDataModule
@@ -14,14 +15,88 @@ from models import LSTM, StackedLSTM, TransformerNet, XGBoost
 
 # import pytorch related
 import torch
-from torch.utils.data import ConcatDataset
+from torch.utils.data import TensorDataset, random_split, DataLoader
 
 # and pytorch-lightning related stuff
 import pytorch_lightning as pl
-from pytorch_lightning import seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger, CometLogger
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+
+
+class ActiveLearner(object):
+    
+    def __init__(self, config, model, datamodule):
+        self.init_ratio = config.init_ratio
+        self.update_ratio = config.update_ratio
+        self.decision_boundary = config.decision_boundary
+        self.confidence_threshold = config.confidence_threshold
+
+        self.model = model
+        self.dm = datamodule
+        self.queried = list()
+
+    def _get_counts(self, targets=None):
+        if targets is None:
+            return Counter(torch.flatten(self.train_tgt).tolist())
+        else:
+            return Counter(torch.flatten(targets).tolist())
+
+    def _get_distribution(self, targets):
+        counts = self._get_counts(targets)
+        return f'{counts[0]}({counts[0] / len(targets):.2f}):{counts[1]}({counts[1] / len(targets):.2f})'
+
+    def setup(self, pid):
+        # setup datamodule and get full dataset
+        self.dm.setup(stage=None, test_id=pid)
+        full_data = self.dm.full_dataset()  # train + valid
+
+        # split full dataset into initial batch and datastream
+        self.full_size = len(full_data)
+        init_size = round(self.full_size * self.init_ratio)
+        self.init_batch, self.datastream = random_split(
+            dataset     = full_data,
+            lengths     = [init_size, self.full_size - init_size],
+            generator   = torch.Generator()
+        )
+        self.train_inp, self.train_tgt = self.init_batch[:]
+        print(f'Initial: {self._get_distribution(self.train_tgt)}')
+
+        # make init loader and stream loader
+        self.init_loader = DataLoader(self.init_batch, batch_size=init_size)
+        self.stream_loader = DataLoader(self.datastream, batch_size=1)
+
+        # define update size and minority label
+        self.update_size = round(self.full_size * self.update_ratio)
+        self.minority = Counter(torch.flatten(self.init_batch[:][1]).tolist()).most_common()[-1][0]
+
+        return self
+
+    def infer(self, inp):
+        # try inferring the true label of the given input
+        self.model.eval()  # set model to eval before inference
+        logit = self.model(inp)
+        proba = torch.sigmoid(logit)
+        pred = proba > self.decision_boundary
+        return pred, proba
+
+    def query(self, pred, proba):
+        # define query rule
+        return (pred == self.minority) or (abs(proba - self.decision_boundary) <= self.confidence_threshold)
+
+    def update(self):
+        # add queried samples to the train set
+        queried_inp, queried_tgt = map(lambda x: torch.cat(x, dim=0), zip(*self.queried))
+        self.train_inp = torch.cat([self.train_inp, queried_inp], dim=0) 
+        self.train_tgt = torch.cat([self.train_tgt, queried_tgt], dim=0)
+        print(f'Queried: {self._get_distribution(queried_tgt)}')
+        print(f'Updated: {self._get_distribution(self.train_tgt)}')
+        print(f'Percentage: {len(self.train_tgt) / self.full_size:.2f}')
+
+        # empty the list of queried samples
+        self.queried.clear()
+
+        return TensorDataset(self.train_inp, self.train_tgt)
 
 
 class Experiment(object):
@@ -31,7 +106,7 @@ class Experiment(object):
         self.config = get_config(config)
         
         # set seed
-        seed_everything(self.config.exp.seed)
+        pl.seed_everything(self.config.exp.seed)
 
         # prepare data
         self.dm = KEMOCONDataModule(
@@ -40,24 +115,25 @@ class Experiment(object):
         )
 
         # get experiment name
-        exp_name = f'{self.config.exp.model}_{self.config.exp.type}_{self.config.exp.target}_{self.config.exp.pos_label}'
-        print(f'Experiment: {exp_name}, w/ participants: {list(self.dm.ids)}')
+        self.exp_name = f'{self.config.exp.model}_{self.config.exp.type}_{self.config.exp.target}_{self.config.exp.pos_label}_{int(time.time())}'
+        print(f'Experiment: {self.exp_name}, w/ participants: {list(self.dm.ids)}')
 
         # make directory to save results
         os.makedirs(os.path.expanduser(self.config.exp.savedir), exist_ok=True)
 
         # set path to save experiment results
-        self.savepath = os.path.expanduser(os.path.join(self.config.exp.savedir, f'{exp_name}_{int(time.time())}.json'))
+        self.savepath = os.path.expanduser(os.path.join(self.config.exp.savedir, f'{self.exp_name}.json'))
         
     def init_logger(self, pid):
         # set version number if needed
-        version = "" if pid is None else f'_{pid:02d}'
+        version = '' if pid is None else f'_{pid:02d}'
 
         # make logger
         if self.config.logger.type == 'tensorboard':
             logger = TensorBoardLogger(
                 save_dir    = os.path.expanduser(self.config.logger.logdir),
-                name        = f'{self.config.exp.model}_{self.config.exp.type}_{self.config.exp.target}_{self.config.exp.pos_label}{version}',
+                name        = f'{self.exp_name}',
+                version     = version
             )
         elif self.config.logger.type == 'comet':
             logger = CometLogger(
@@ -65,7 +141,7 @@ class Experiment(object):
                 workspace       = os.environ.get(self.config.logger.workspace),
                 save_dir        = os.path.expanduser(self.config.logger.logdir),
                 project_name    = self.config.logger.project_name,
-                experiment_name = f'{self.config.exp.model}_{self.config.exp.type}_{self.config.exp.target}_{self.config.exp.pos_label}{version}'
+                experiment_name = f'{self.exp_name}{version}'
             )
         return logger
 
@@ -112,7 +188,7 @@ class Experiment(object):
             # find optimal lr
             if self.config.exp.tune:
                 trainer.tune(self.model, datamodule=self.dm)
-
+            print(self.dm.val_dataloader().dataset.indices)
             # train model
             trainer.fit(self.model, self.dm)
 
@@ -141,12 +217,67 @@ class Experiment(object):
 
         return metr, cm
 
-    # def _stream_body(self, pid=None):
-    #     # init model
-    #     self.model = self.init_model(self.config.hparams)
+    def _stream_body(self, pid=None):
+        # init model and and setup learner
+        self.model = self.init_model(self.config.hparams)
+        self.learner = ActiveLearner(
+            config      = self.config.exp.active_learning,
+            model       = self.model,
+            datamodule  = self.dm,
+        ).setup(pid)
+        metrics = list()
+        confmats = list()
+        counts = list()
 
-    #     # get full data
-    #     full_data = self.dm.prepare_data()
+        # init training with pl.LightningModule models
+        if self.config.trainer is not None:
+            # make trainer
+            trainer = pl.Trainer(**vars(self.config.trainer))
+
+            # fit model to initial batch
+            trainer.fit(self.model, train_dataloader=self.learner.init_loader)
+
+            # test model on test set
+            metr = trainer.test(self.model, test_dataloaders=self.dm.test_dataloader())
+            cm = self.model.test_confmat
+            print(cm)
+            
+            # log test results
+            metrics.append(metr)
+            confmats.append(cm)
+            counts.append(self.learner._get_counts())
+
+            # now retrieve samples from a stream
+            for i, (inp, tgt) in enumerate(self.learner.stream_loader):
+
+                # and try inferring their true label
+                pred, proba = self.learner.infer(inp)
+
+                # query if prediction label and confidence satisfy query rule
+                if self.learner.query(pred, proba):
+                    self.learner.queried.append((inp, tgt))  # add current sample to queried set
+
+                # if the number of queried samples is larger than the update size
+                if len(self.learner.queried) >= self.learner.update_size:
+                    train_set = self.learner.update()
+                    train_loader = DataLoader(train_set, batch_size=len(train_set))
+
+                    # re-fit model to the new trainset
+                    # do we restart training from where we left off?
+                    trainer.max_epochs += vars(self.config.trainer)['max_epochs']
+                    trainer.fit(self.model, train_dataloader=train_loader)
+
+                    # test fitted model again on test set
+                    metr = trainer.test(self.model, test_dataloaders=self.dm.test_dataloader())
+                    cm = self.model.test_confmat
+                    print(cm)
+
+                    # log test results
+                    metrics.append(metr)
+                    confmats.append(cm)
+                    counts.append(self.learner._get_counts())
+
+            return metrics, confmats, counts
 
     def run(self) -> None:
         # run holdout validation
@@ -182,9 +313,12 @@ class Experiment(object):
                 'confmats': confmats
             }
 
-        # # run stream-based active learning (holdout)
-        # if self.config.exp.type == 'active-holdout':
-        #     self._stream_body()
+        # run stream-based active learning (holdout)
+        if self.config.exp.type == 'active-holdout':
+            metrics, confmats, counts = self._stream_body()
+            print(metrics)
+            print(confmats)
+            print(counts)
 
         # save results
         with open(self.savepath, 'w') as f:

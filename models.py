@@ -6,6 +6,7 @@ from xgboost import DMatrix
 import torch
 import torch.nn.functional as F
 import pytorch_lightning as pl
+from pytorch_lightning.core.decorators import auto_move_data
 
 from torch import nn
 from torch.utils.data import DataLoader, random_split
@@ -38,6 +39,7 @@ class LSTM(pl.LightningModule):
         # define loss
         self.loss = nn.BCEWithLogitsLoss()
 
+    @auto_move_data
     def forward(self, x):
         out, _ = self.lstm(x)
         logits = self.fc(out)[:, -1]  # if batch_first=True

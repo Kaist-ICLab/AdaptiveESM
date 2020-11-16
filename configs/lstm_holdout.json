@@ -45,11 +45,11 @@
     "hparams": {
         "inp_size": 4,
         "out_size": 1,
-        "hidden_size": 40,
+        "hidden_size": 20,
         "n_layers": 2,
         "p_drop": 0.2,
         "bidirectional": true,
-        "learning_rate": 0.001,
+        "learning_rate": 0.00085,
         "scheduler": null
     }
 }
