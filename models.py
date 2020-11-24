@@ -96,7 +96,7 @@ class LSTM(pl.LightningModule):
 
     def test_epoch_end(self, outputs):
         # save test confusion matrix
-        self.test_confmat = sum(outputs)
+        self.cm = sum(outputs)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)

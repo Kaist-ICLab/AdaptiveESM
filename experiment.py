@@ -129,20 +129,11 @@ class Experiment(object):
         version = '' if pid is None else f'_{pid:02d}'
 
         # make logger
-        if self.config.logger.type == 'tensorboard':
-            logger = TensorBoardLogger(
-                save_dir    = os.path.expanduser(self.config.logger.logdir),
-                name        = f'{self.exp_name}',
-                version     = version
-            )
-        elif self.config.logger.type == 'comet':
-            logger = CometLogger(
-                api_key         = os.environ.get(self.config.logger.api_key),
-                workspace       = os.environ.get(self.config.logger.workspace),
-                save_dir        = os.path.expanduser(self.config.logger.logdir),
-                project_name    = self.config.logger.project_name,
-                experiment_name = f'{self.exp_name}{version}'
-            )
+        logger = TensorBoardLogger(
+            save_dir    = os.path.expanduser(self.config.logger.logdir),
+            name        = f'{self.exp_name}',
+            version     = version
+        )
         return logger
 
     def init_model(self, hparams):
@@ -188,7 +179,7 @@ class Experiment(object):
             # find optimal lr
             if self.config.exp.tune:
                 trainer.tune(self.model, datamodule=self.dm)
-            print(self.dm.val_dataloader().dataset.indices)
+            
             # train model
             trainer.fit(self.model, self.dm)
 
@@ -204,7 +195,7 @@ class Experiment(object):
                 'auroc': results['test_auroc'],
                 'num_epochs': self.model.current_epoch,
             }
-            cm = self.model.test_confmat
+            cm = self.model.cm
         
         else:
             # train model: concat train and valid inputs and labels and convert torch tensors to numpy arrays
