@@ -1,10 +1,6 @@
 {   
     "logger": {
-        "type": "tensorboard",
-        "api_key": null,
-        "workspace": "cheulyop",
-        "logdir": "./logs",
-        "project_name": "adaptiveesm"
+        "logdir": "./logs"
     },
     "exp": {
         "seed": 1,
@@ -18,7 +14,9 @@
             "init_ratio": 0.05,
             "update_ratio": 0.01,
             "decision_boundary": 0.5,
-            "confidence_threshold": 0.2
+            "confidence_threshold": 0.2,
+            "update_lr": 0.0008,
+            "update_epochs": 100
         }
     },
     "data": {
@@ -45,7 +43,7 @@
         "auto_select_gpus": false,
         "precision": 16,
         "deterministic": true,
-        "max_epochs": 100,
+        "max_epochs": 1000,
         "gradient_clip_val": 0.2
     },
     "hparams": {
@@ -55,7 +53,7 @@
         "n_layers": 2,
         "p_drop": 0.2,
         "bidirectional": true,
-        "learning_rate": 0.005,
+        "learning_rate": 0.0008,
         "scheduler": null
     }
 }

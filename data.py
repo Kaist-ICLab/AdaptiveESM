@@ -226,8 +226,8 @@ class KEMOCONDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.kemocon_test, batch_size=self.batch_size)
 
-    def full_dataset(self):
-        # returns the full dataset except the testset as a TensorDataset
+    def trainval_dataset(self):
+        # returns train + valid as a TensorDataset
         return TensorDataset(
             *map(lambda x: torch.cat(x, dim=0), zip(self.kemocon_train[:], self.kemocon_val[:]))
         )

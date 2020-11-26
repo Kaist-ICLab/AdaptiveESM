@@ -27,10 +27,12 @@ from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 class ActiveLearner(object):
     
     def __init__(self, config, model, datamodule):
-        self.init_ratio = config.init_ratio
-        self.update_ratio = config.update_ratio
-        self.decision_boundary = config.decision_boundary
-        self.confidence_threshold = config.confidence_threshold
+        self.init_ratio             = config.init_ratio
+        self.update_ratio           = config.update_ratio
+        self.decision_boundary      = config.decision_boundary
+        self.confidence_threshold   = config.confidence_threshold
+        self.update_lr              = config.update_lr
+        self.update_epochs          = config.update_epochs
 
         self.model = model
         self.dm = datamodule
@@ -49,7 +51,7 @@ class ActiveLearner(object):
     def setup(self, pid):
         # setup datamodule and get full dataset
         self.dm.setup(stage=None, test_id=pid)
-        full_data = self.dm.full_dataset()  # train + valid
+        full_data = self.dm.trainval_dataset()  # train + valid
 
         # split full dataset into initial batch and datastream
         self.full_size = len(full_data)
@@ -68,7 +70,7 @@ class ActiveLearner(object):
 
         # define update size and minority label
         self.update_size = round(self.full_size * self.update_ratio)
-        self.minority = Counter(torch.flatten(self.init_batch[:][1]).tolist()).most_common()[-1][0]
+        self.minority = Counter(torch.flatten(self.train_tgt).tolist()).most_common()[-1][0]
 
         return self
 
@@ -89,6 +91,11 @@ class ActiveLearner(object):
         queried_inp, queried_tgt = map(lambda x: torch.cat(x, dim=0), zip(*self.queried))
         self.train_inp = torch.cat([self.train_inp, queried_inp], dim=0) 
         self.train_tgt = torch.cat([self.train_tgt, queried_tgt], dim=0)
+
+        # update minority label
+        self.minority = Counter(torch.flatten(self.train_tgt).tolist()).most_common()[-1][0]
+
+        # print info
         print(f'Queried: {self._get_distribution(queried_tgt)}')
         print(f'Updated: {self._get_distribution(self.train_tgt)}')
         print(f'Percentage: {len(self.train_tgt) / self.full_size:.2f}')
@@ -184,7 +191,7 @@ class Experiment(object):
             trainer.fit(self.model, self.dm)
 
             # test model and get results
-            results = trainer.test(self.model)[0]
+            [results] = trainer.test(self.model)
 
             # return metrics and confusion matrix
             metr = {
@@ -208,17 +215,19 @@ class Experiment(object):
 
         return metr, cm
 
-    def _stream_body(self, pid=None):
-        # init model and and setup learner
+    def _active_body(self, pid=None):
+        # init model 
         self.model = self.init_model(self.config.hparams)
+
+        # init active learner and set it up for training
         self.learner = ActiveLearner(
             config      = self.config.exp.active_learning,
             model       = self.model,
             datamodule  = self.dm,
         ).setup(pid)
-        metrics = list()
-        confmats = list()
-        counts = list()
+        
+        # init dict to store results
+        results = {'config': config_to_dict(self.config)}
 
         # init training with pl.LightningModule models
         if self.config.trainer is not None:
@@ -226,20 +235,31 @@ class Experiment(object):
             trainer = pl.Trainer(**vars(self.config.trainer))
 
             # fit model to initial batch
-            trainer.fit(self.model, train_dataloader=self.learner.init_loader)
+            trainer.fit(
+                model               = self.model,
+                train_dataloader    = self.learner.init_loader
+            )
 
-            # test model on test set
-            metr = trainer.test(self.model, test_dataloaders=self.dm.test_dataloader())
-            cm = self.model.test_confmat
+            # test model and get results
+            [metr] = trainer.test(
+                model               = self.model,
+                test_dataloaders    = self.dm.test_dataloader()
+            )
+            counts = dict(self.learner._get_counts())
+            cm = self.model.cm
             print(cm)
-            
-            # log test results
-            metrics.append(metr)
-            confmats.append(cm)
-            counts.append(self.learner._get_counts())
 
-            # now retrieve samples from a stream
-            for i, (inp, tgt) in enumerate(self.learner.stream_loader):
+            # update learning rate to use a different learning rate for learning from datastream
+            if self.learner.update_lr is not None:
+                self.model.hparams.learning_rate = self.learner.update_lr
+            
+            # log test results for the initial batch
+            results.setdefault('metrics', list()).append(metr)
+            results.setdefault('counts', list()).append(counts)
+            results.setdefault('cms', list()).append(cm.tolist())
+
+            # now receive samples one by one from a stream
+            for inp, tgt in self.learner.stream_loader:
 
                 # and try inferring their true label
                 pred, proba = self.learner.infer(inp)
@@ -254,21 +274,29 @@ class Experiment(object):
                     train_loader = DataLoader(train_set, batch_size=len(train_set))
 
                     # re-fit model to the new trainset
-                    # do we restart training from where we left off?
-                    trainer.max_epochs += vars(self.config.trainer)['max_epochs']
-                    trainer.fit(self.model, train_dataloader=train_loader)
+                    trainer.max_epochs += self.learner.update_epochs
+                    trainer.fit(
+                        model               = self.model,
+                        train_dataloader    = train_loader
+                    )
 
                     # test fitted model again on test set
-                    metr = trainer.test(self.model, test_dataloaders=self.dm.test_dataloader())
-                    cm = self.model.test_confmat
+                    [metr] = trainer.test(
+                        model               = self.model,
+                        test_dataloaders    = self.dm.test_dataloader()
+                    )
+                    counts = dict(self.learner._get_counts())
+                    cm = self.model.cm
                     print(cm)
 
                     # log test results
-                    metrics.append(metr)
-                    confmats.append(cm)
-                    counts.append(self.learner._get_counts())
+                    results['metrics'].append(metr)
+                    results['counts'].append(counts)
+                    results['cms'].append(cm.tolist())
 
-            return metrics, confmats, counts
+            # TODO: do we want to do anything else when we have seen all samples in the stream?
+
+        return results
 
     def run(self) -> None:
         # run holdout validation
@@ -306,10 +334,7 @@ class Experiment(object):
 
         # run stream-based active learning (holdout)
         if self.config.exp.type == 'active-holdout':
-            metrics, confmats, counts = self._stream_body()
-            print(metrics)
-            print(confmats)
-            print(counts)
+            results = self._active_body()
 
         # save results
         with open(self.savepath, 'w') as f:
