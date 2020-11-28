@@ -36,3 +36,4 @@ notebooks/
 # logs and results
 logs/
 results/
+lightning_logs/

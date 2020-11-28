@@ -16,6 +16,7 @@ from torch.utils.data import TensorDataset, random_split, DataLoader
 
 
 class KEMOCONDataModule(pl.LightningDataModule):
+    
     # data shape: [B, 20, 4]
     def __init__(self, config, label_fn=None):
         super().__init__()
@@ -175,6 +176,7 @@ class KEMOCONDataModule(pl.LightningDataModule):
         # setup expects a string arg stage. It is used to separate setup logic for trainer.fit and trainer.test.
         # assign train/val split(s) for use in dataloaders
         data = self.prepare_data()
+        self.size_ = sum(len(data[pid]) for pid in data)  # total number of samples in the dataset
         
         # for loso cross-validation
         if test_id is not None:
@@ -223,3 +225,9 @@ class KEMOCONDataModule(pl.LightningDataModule):
 
     def test_dataloader(self):
         return DataLoader(self.kemocon_test, batch_size=self.batch_size)
+
+    def trainval_dataset(self):
+        # returns train + valid as a TensorDataset
+        return TensorDataset(
+            *map(lambda x: torch.cat(x, dim=0), zip(self.kemocon_train[:], self.kemocon_val[:]))
+        )

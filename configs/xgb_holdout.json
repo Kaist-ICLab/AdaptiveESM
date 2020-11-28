@@ -3,7 +3,7 @@
         "seed": 1,
         "model": "xgboost",
         "type": "holdout",
-        "target": "valence",
+        "target": "arousal",
         "pos_label": "high",
         "savedir": "~/projects/AdaptiveESM/results",
         "tune": false
@@ -14,7 +14,7 @@
         "label_type": "self",
         "n_classes": 2,
         "val_size": 0.2,
-        "num_segs": 5,
+        "num_segs": 12,
         "resample": false,
         "extract_features": true,
         "standardize": true,
