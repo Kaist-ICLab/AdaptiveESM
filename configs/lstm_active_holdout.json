@@ -11,12 +11,13 @@
         "savedir": "~/projects/AdaptiveESM/results",
         "tune": false,
         "active_learning": {
-            "init_ratio": 0.05,
-            "update_ratio": 0.01,
+            "init_ratio": 0.1,
+            "val_ratio": 0.2,
+            "update_ratio": 0.02,
             "decision_boundary": 0.5,
-            "confidence_threshold": 0.2,
-            "update_lr": 0.0008,
-            "update_epochs": 100
+            "confidence_threshold": 0.01,
+            "update_lr": 0.0001,
+            "update_epochs": 500
         }
     },
     "data": {
@@ -25,7 +26,7 @@
         "label_type": "self",
         "n_classes": 2,
         "val_size": 0.1,
-        "num_segs": 12,
+        "num_segs": 5,
         "resample": true,
         "extract_features": false,
         "standardize": true,
@@ -43,7 +44,7 @@
         "auto_select_gpus": false,
         "precision": 16,
         "deterministic": true,
-        "max_epochs": 1000,
+        "max_epochs": 500,
         "gradient_clip_val": 0.2
     },
     "hparams": {
@@ -53,7 +54,7 @@
         "n_layers": 2,
         "p_drop": 0.2,
         "bidirectional": true,
-        "learning_rate": 0.0008,
+        "learning_rate": 0.0001,
         "scheduler": null
     }
 }

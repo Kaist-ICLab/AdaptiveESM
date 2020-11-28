@@ -24,17 +24,17 @@ class LSTM(pl.LightningModule):
 
         # define LSTM and fully-connected layer
         self.lstm = nn.LSTM(
-            input_size      = hparams.inp_size,
-            hidden_size     = hparams.hidden_size,
-            num_layers      = hparams.n_layers,
-            dropout         = hparams.p_drop,
-            bidirectional   = hparams.bidirectional,
+            input_size      = self.hparams['inp_size'],
+            hidden_size     = self.hparams['hidden_size'],
+            num_layers      = self.hparams['n_layers'],
+            dropout         = self.hparams['p_drop'],
+            bidirectional   = self.hparams['bidirectional'],
             batch_first     = True
         )
-        if hparams.bidirectional is True:
-            self.fc = nn.Linear(hparams.hidden_size * 2, hparams.out_size)
+        if self.hparams['bidirectional'] is True:
+            self.fc = nn.Linear(self.hparams['hidden_size'] * 2, self.hparams['out_size'])
         else:
-            self.fc = nn.Linear(hparams.hidden_size, hparams.out_size)
+            self.fc = nn.Linear(self.hparams['hidden_size'], self.hparams['out_size'])
         
         # define loss
         self.loss = nn.BCEWithLogitsLoss()
@@ -99,16 +99,16 @@ class LSTM(pl.LightningModule):
         self.cm = sum(outputs)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams['learning_rate'])
 
         # configure learning rate scheduler if needed
-        if self.hparams.scheduler is not None:
-            if self.hparams.scheduler.type == 'CosineAnnealingWarmRestarts':
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, **vars(self.hparams.scheduler.params))
+        if self.hparams['scheduler'] is not None:
+            if self.hparams['scheduler'].type == 'CosineAnnealingWarmRestarts':
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, **vars(self.hparams['scheduler'].params))
                 return [optimizer], [scheduler]
 
-            elif self.hparams.scheduler.type == 'ReduceLROnPlateau':
-                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **vars(self.hparams.scheduler.params))
+            elif self.hparams['scheduler'].type == 'ReduceLROnPlateau':
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **vars(self.hparams['scheduler'].params))
                 return {'optimizer': optimizer, 'lr_scheduler': scheduler, 'monitor': 'valid_loss'}
 
         else:

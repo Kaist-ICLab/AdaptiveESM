@@ -19,8 +19,8 @@ from torch.utils.data import TensorDataset, random_split, DataLoader
 
 # and pytorch-lightning related stuff
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import TensorBoardLogger, CometLogger
-from pytorch_lightning.callbacks import LearningRateMonitor
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 
@@ -28,6 +28,7 @@ class ActiveLearner(object):
     
     def __init__(self, config, model, datamodule):
         self.init_ratio             = config.init_ratio
+        self.val_ratio              = config.val_ratio
         self.update_ratio           = config.update_ratio
         self.decision_boundary      = config.decision_boundary
         self.confidence_threshold   = config.confidence_threshold
@@ -48,6 +49,15 @@ class ActiveLearner(object):
         counts = self._get_counts(targets)
         return f'{counts[0]}({counts[0] / len(targets):.2f}):{counts[1]}({counts[1] / len(targets):.2f})'
 
+    def initial_setup_info(self):
+        info_msg = (
+            "======== Initial setup ========\n"
+            f"Initial: {self._get_distribution(self.train_tgt)}\n"
+            f"Validation: {self._get_distribution(self.valid_tgt) if len(self.valid_tgt) > 0 else None}\n"
+            "==============================="
+        )
+        return info_msg
+
     def setup(self, pid):
         # setup datamodule and get full dataset
         self.dm.setup(stage=None, test_id=pid)
@@ -55,17 +65,21 @@ class ActiveLearner(object):
 
         # split full dataset into initial batch and datastream
         self.full_size = len(full_data)
-        init_size = round(self.full_size * self.init_ratio)
-        self.init_batch, self.datastream = random_split(
+        init_size = round(self.full_size * self.init_ratio * (1 - self.val_ratio))
+        val_size = round(self.full_size * self.init_ratio * self.val_ratio)
+
+        self.init_batch, self.val_batch, self.datastream = random_split(
             dataset     = full_data,
-            lengths     = [init_size, self.full_size - init_size],
+            lengths     = [init_size, val_size, self.full_size - init_size - val_size],
             generator   = torch.Generator()
         )
         self.train_inp, self.train_tgt = self.init_batch[:]
-        print(f'Initial: {self._get_distribution(self.train_tgt)}')
+        self.valid_inp, self.valid_tgt = self.val_batch[:]
+        print(self.initial_setup_info())
 
         # make init loader and stream loader
         self.init_loader = DataLoader(self.init_batch, batch_size=init_size)
+        self.val_loader = DataLoader(self.val_batch, batch_size=val_size) if val_size > 0 else None
         self.stream_loader = DataLoader(self.datastream, batch_size=1)
 
         # define update size and minority label
@@ -87,23 +101,38 @@ class ActiveLearner(object):
         return (pred == self.minority) or (abs(proba - self.decision_boundary) <= self.confidence_threshold)
 
     def update(self):
-        # add queried samples to the train set
+        # get queried samples and indices to update for train and valid
         queried_inp, queried_tgt = map(lambda x: torch.cat(x, dim=0), zip(*self.queried))
-        self.train_inp = torch.cat([self.train_inp, queried_inp], dim=0) 
-        self.train_tgt = torch.cat([self.train_tgt, queried_tgt], dim=0)
+        indices = torch.randperm(len(self.queried))
+        valid_idx = indices[:int(len(indices) * self.val_ratio)]
+        train_idx = indices[int(len(indices) * self.val_ratio):]
+
+        # update train set
+        self.train_inp = torch.cat([self.train_inp, queried_inp[train_idx]], dim=0)
+        self.train_tgt = torch.cat([self.train_tgt, queried_tgt[train_idx]], dim=0)
+
+        # update validation set
+        self.valid_inp = torch.cat([self.valid_inp, queried_inp[valid_idx]], dim=0) 
+        self.valid_tgt = torch.cat([self.valid_tgt, queried_tgt[valid_idx]], dim=0)
 
         # update minority label
         self.minority = Counter(torch.flatten(self.train_tgt).tolist()).most_common()[-1][0]
 
         # print info
-        print(f'Queried: {self._get_distribution(queried_tgt)}')
-        print(f'Updated: {self._get_distribution(self.train_tgt)}')
-        print(f'Percentage: {len(self.train_tgt) / self.full_size:.2f}')
+        print(
+            f'Queried: {self._get_distribution(queried_tgt)}\n'
+            f'Updated train: {self._get_distribution(self.train_tgt)}\n'
+            f'Updated valid: {self._get_distribution(self.valid_tgt) if len(self.valid_tgt) > 0 else None}\n'
+            f'Percentage: {len(self.train_tgt) / self.full_size:.2f}'
+        )
 
         # empty the list of queried samples
         self.queried.clear()
 
-        return TensorDataset(self.train_inp, self.train_tgt)
+        # make train_loader and valid_loader
+        self.train_loader = DataLoader(TensorDataset(self.train_inp, self.train_tgt), batch_size=len(self.train_tgt))
+        self.val_loader = DataLoader(TensorDataset(self.valid_inp, self.valid_tgt), batch_size=len(self.valid_tgt)) if len(self.valid_tgt) > 0 else None
+        return
 
 
 class Experiment(object):
@@ -231,15 +260,35 @@ class Experiment(object):
 
         # init training with pl.LightningModule models
         if self.config.trainer is not None:
+            # init logger
+            if self.config.logger is not None:
+                logger = self.init_logger(pid)
+
+            # init lr monitor and checkpoint callback
+            callbacks = list()
+            if self.learner.val_ratio > 0:
+                checkpoint_callback = ModelCheckpoint(
+                    monitor     = 'valid_loss',
+                    save_last   = True,
+                    mode        = 'min',
+                )
+                callbacks.append(checkpoint_callback)
+
             # make trainer
-            trainer = pl.Trainer(**vars(self.config.trainer))
+            trainer_args = vars(self.config.trainer)
+            trainer_args.update({
+                'logger': logger,
+                'callbacks': callbacks
+            })
+            trainer = pl.Trainer(**trainer_args)
 
             # fit model to initial batch
             trainer.fit(
                 model               = self.model,
-                train_dataloader    = self.learner.init_loader
+                train_dataloader    = self.learner.init_loader,
+                val_dataloaders     = self.learner.val_loader
             )
-
+            
             # test model and get results
             [metr] = trainer.test(
                 model               = self.model,
@@ -247,11 +296,8 @@ class Experiment(object):
             )
             counts = dict(self.learner._get_counts())
             cm = self.model.cm
-            print(cm)
-
-            # update learning rate to use a different learning rate for learning from datastream
-            if self.learner.update_lr is not None:
-                self.model.hparams.learning_rate = self.learner.update_lr
+            # print(cm)
+            # print(trainer.checkpoint_callback.best_model_path)
             
             # log test results for the initial batch
             results.setdefault('metrics', list()).append(metr)
@@ -270,16 +316,24 @@ class Experiment(object):
 
                 # if the number of queried samples is larger than the update size
                 if len(self.learner.queried) >= self.learner.update_size:
-                    train_set = self.learner.update()
-                    train_loader = DataLoader(train_set, batch_size=len(train_set))
+                    self.learner.update()  # update active learner
+
+                    # reload model from the last best checkpoint if we are training with validation set
+                    if self.learner.val_loader is not None:
+                        self.model = self.model.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
+
+                    # update model to use a different learning rate for learning from datastream
+                    if self.learner.update_lr is not None:
+                        self.model.hparams.learning_rate = self.learner.update_lr
 
                     # re-fit model to the new trainset
                     trainer.max_epochs += self.learner.update_epochs
                     trainer.fit(
                         model               = self.model,
-                        train_dataloader    = train_loader
+                        train_dataloader    = self.learner.train_loader,
+                        val_dataloaders     = self.learner.val_loader
                     )
-
+                    
                     # test fitted model again on test set
                     [metr] = trainer.test(
                         model               = self.model,
@@ -287,14 +341,17 @@ class Experiment(object):
                     )
                     counts = dict(self.learner._get_counts())
                     cm = self.model.cm
-                    print(cm)
+                    # print(cm)
+                    # print(trainer.checkpoint_callback.best_model_path)
 
                     # log test results
                     results['metrics'].append(metr)
                     results['counts'].append(counts)
                     results['cms'].append(cm.tolist())
 
-            # TODO: do we want to do anything else when we have seen all samples in the stream?
+            # TODO: now that we have seen all samples from the stream, do we want to do anything else?
+
+        # TODO: active learning with XGBoost
 
         return results
 
@@ -344,7 +401,7 @@ class Experiment(object):
 if __name__ == "__main__":
     # init parser
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, required=True, help='path to a configuration file for running an experiment')
+    parser.add_argument('--config', type=str, required=True, help='path to an experiment configuration file')
     args = parser.parse_args()
 
     # run experiment with configuration
