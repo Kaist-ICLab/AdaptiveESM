@@ -1,5 +1,6 @@
 import os
 import json
+import pickle
 import warnings
 import numpy as np
 from tqdm import tqdm
@@ -27,6 +28,8 @@ class KEMOCONDataModule(pl.LightningDataModule):
         self.sample_rates       = [64, 4, 4, 1]
 
         self.data_dir           = os.path.expanduser(config.data_dir)
+        self.load_dir           = os.path.expanduser(config.load_dir) if config.load_dir is not None else None
+        self.save_dir           = os.path.expanduser(config.save_dir) if config.save_dir is not None else None
         self.batch_size         = config.batch_size
         self.label_type         = config.label_type
         self.n_classes          = config.n_classes
@@ -40,8 +43,12 @@ class KEMOCONDataModule(pl.LightningDataModule):
         self.label_fn           = label_fn
         self.ids                = self.get_ids()
 
+        if self.load_dir and self.save_dir:
+            warnings.warn('Loading and saving processed features mutually exclusive, save_dir will be set to None.', UserWarning)
+            self.save_dir = None
+
         if self.resample and self.extract_features:
-            warnings.warn('Resampling and feature extraction are mutually exclusive (cannot extract features from downsampled BVP signals), extract_features is set to false.', UserWarning)
+            warnings.warn('Resampling and feature extraction are mutually exclusive (cannot extract features from downsampled BVP signals), extract_features will be set to false.', UserWarning)
             self.extract_features = False
 
     def get_features(self, sig, sr, sigtype):
@@ -56,8 +63,17 @@ class KEMOCONDataModule(pl.LightningDataModule):
         return features
 
     def prepare_data(self, check_id=False):
+        # load previously processed segments from load_dir
+        if self.load_dir is not None:
+            with open(self.load_dir, 'rb') as handle:
+                processed = pickle.load(handle)
+            print(f'Loaded processed segments from {self.load_dir}.')
+            
+            # return loaded segments and skip the rest
+            return processed
+
         # Note: prepare_data is called from a single GPU. Do not use it to assign state (self.x = y)
-        # load data from data_dir
+        # load raw data from data_dir
         pid_to_segments = dict()
 
         # for each participant
@@ -166,8 +182,17 @@ class KEMOCONDataModule(pl.LightningDataModule):
             # save processed segments to dict
             pid_to_segments[pid] = curr_x
 
-        # return dict sorted by pid
-        return OrderedDict(sorted(pid_to_segments.items(), key=lambda x: x[0]))
+        # sort pid_to_segments by pid
+        processed = OrderedDict(sorted(pid_to_segments.items(), key=lambda x: x[0]))
+
+        # pickle processed segments to save_dir
+        if self.save_dir is not None:
+            with open(self.save_dir, 'wb') as handle:
+                pickle.dump(processed, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            print(f'Saved processed segments to {self.save_dir}.')
+
+        # return dict of processed segments sorted by pid
+        return processed
 
     def get_ids(self):
         return self.prepare_data(check_id=True).keys()

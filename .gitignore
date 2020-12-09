@@ -37,3 +37,4 @@ notebooks/
 logs/
 results/
 lightning_logs/
+outputs/
