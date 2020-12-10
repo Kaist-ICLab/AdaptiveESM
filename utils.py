@@ -13,8 +13,10 @@ def get_config(path):
 def transform_label(target, pos_label):
 
     def transform_fn(a, v):
-        label = a if target == 'arousal' else v
-        return int(label > 2) if pos_label == 'high' else int(label <= 2)
+        if target == 'arousal':
+            return int(a > 3) if pos_label == 'high' else int(a <= 3)
+        else:
+            return int(v > 2) if pos_label == 'high' else int(v <= 2)
 
     return transform_fn
 

@@ -3,10 +3,15 @@ import os
 import time
 import json
 import argparse
+import numpy as np
 import pandas as pd
 from typing import Dict
 from argparse import Namespace
 from collections import Counter
+
+# import xgboost
+import xgboost as xgb
+from xgboost import DMatrix
 
 # import custom modules
 from data import KEMOCONDataModule
@@ -30,8 +35,12 @@ class ActiveLearner(object):
         self.init_ratio             = config.init_ratio
         self.val_ratio              = config.val_ratio
         self.update_ratio           = config.update_ratio
-        self.decision_boundary      = config.decision_boundary
-        self.confidence_threshold   = config.confidence_threshold
+
+        self.decision_boundary      = model.hparams.threshold if isinstance(model, XGBoost) else config.decision_boundary
+        self.gamma                  = config.gamma
+        self.alpha                  = config.alpha
+        self.beta                   = config.beta
+
         self.update_lr              = config.update_lr
         self.update_epochs          = config.update_epochs
 
@@ -51,10 +60,10 @@ class ActiveLearner(object):
 
     def initial_setup_info(self):
         info_msg = (
-            "======== Initial setup ========\n"
+            "========== Initial setup ==========\n"
             f"Initial: {self._get_distribution(self.train_tgt)}\n"
             f"Validation: {self._get_distribution(self.valid_tgt) if len(self.valid_tgt) > 0 else None}\n"
-            "==============================="
+            "==================================="
         )
         return info_msg
 
@@ -88,42 +97,53 @@ class ActiveLearner(object):
 
         return self
 
-    def infer(self, inp):
-        # try inferring the true label of the given input
-        self.model.eval()  # set model to eval before inference
-        logit = self.model(inp)
-        proba = torch.sigmoid(logit)
-        pred = proba > self.decision_boundary
-        return pred, proba
+    def infer(self, inp, use_torch=True):
+        # inference with pytorch models
+        if use_torch:
+            self.model.eval()  # set model to eval before inference
+            w = self.model(inp)
+            # p = torch.sigmoid(w)
+            # pred = proba > self.decision_boundary
+        
+        # inference with xgboost
+        else:
+            w = self.model.predict(inp.unsqueeze(0).numpy())
 
-    def query(self, pred, proba):
-        # define query rule
-        return (pred == self.minority) or (abs(proba - self.decision_boundary) <= self.confidence_threshold)
+        return w
+
+    def query(self, w, p):
+        q_u = np.exp(-self.gamma * np.abs(w))  # uncertainty sampling
+        q_m = 1 if self.model.classify(p) == self.minority else 0  # minority oversampling
+        q = self.alpha * q_u + self.beta * q_m  # query probability
+
+        return np.random.binomial(1, q)  # query decision via binary sampling
 
     def update(self):
         # get queried samples and indices to update for train and valid
-        queried_inp, queried_tgt = map(lambda x: torch.cat(x, dim=0), zip(*self.queried))
+        self.queried_inp, self.queried_tgt = map(lambda x: torch.cat(x, dim=0), zip(*self.queried))
         indices = torch.randperm(len(self.queried))
         valid_idx = indices[:int(len(indices) * self.val_ratio)]
         train_idx = indices[int(len(indices) * self.val_ratio):]
 
         # update train set
-        self.train_inp = torch.cat([self.train_inp, queried_inp[train_idx]], dim=0)
-        self.train_tgt = torch.cat([self.train_tgt, queried_tgt[train_idx]], dim=0)
+        self.train_inp = torch.cat([self.train_inp, self.queried_inp[train_idx]], dim=0)
+        self.train_tgt = torch.cat([self.train_tgt, self.queried_tgt[train_idx]], dim=0)
 
         # update validation set
-        self.valid_inp = torch.cat([self.valid_inp, queried_inp[valid_idx]], dim=0) 
-        self.valid_tgt = torch.cat([self.valid_tgt, queried_tgt[valid_idx]], dim=0)
+        self.valid_inp = torch.cat([self.valid_inp, self.queried_inp[valid_idx]], dim=0) 
+        self.valid_tgt = torch.cat([self.valid_tgt, self.queried_tgt[valid_idx]], dim=0)
 
         # update minority label
         self.minority = Counter(torch.flatten(self.train_tgt).tolist()).most_common()[-1][0]
 
         # print info
         print(
-            f'Queried: {self._get_distribution(queried_tgt)}\n'
+            "===================================\n"
+            f'Queried: {self._get_distribution(self.queried_tgt)}\n'
             f'Updated train: {self._get_distribution(self.train_tgt)}\n'
             f'Updated valid: {self._get_distribution(self.valid_tgt) if len(self.valid_tgt) > 0 else None}\n'
-            f'Percentage: {len(self.train_tgt) / self.full_size:.2f}'
+            f'Percentage: {len(self.train_tgt) / self.full_size:.2f}\n'
+            "==================================="
         )
 
         # empty the list of queried samples
@@ -296,8 +316,8 @@ class Experiment(object):
             )
             counts = dict(self.learner._get_counts())
             cm = self.model.cm
-            # print(cm)
-            # print(trainer.checkpoint_callback.best_model_path)
+            print(trainer.checkpoint_callback.best_model_path)
+            print(cm)
             
             # log test results for the initial batch
             results.setdefault('metrics', list()).append(metr)
@@ -307,11 +327,12 @@ class Experiment(object):
             # now receive samples one by one from a stream
             for inp, tgt in self.learner.stream_loader:
 
-                # and try inferring their true label
-                pred, proba = self.learner.infer(inp)
+                # infer label
+                w = self.learner.infer(inp, use_torch=True).detach().cpu()
+                p = torch.sigmoid(w)
 
-                # query if prediction label and confidence satisfy query rule
-                if self.learner.query(pred, proba):
+                # query if condition is met
+                if self.learner.query(w, p):
                     self.learner.queried.append((inp, tgt))  # add current sample to queried set
 
                 # if the number of queried samples is larger than the update size
@@ -341,8 +362,8 @@ class Experiment(object):
                     )
                     counts = dict(self.learner._get_counts())
                     cm = self.model.cm
-                    # print(cm)
-                    # print(trainer.checkpoint_callback.best_model_path)
+                    print(trainer.checkpoint_callback.best_model_path)
+                    print(cm)
 
                     # log test results
                     results['metrics'].append(metr)
@@ -351,7 +372,59 @@ class Experiment(object):
 
             # TODO: now that we have seen all samples from the stream, do we want to do anything else?
 
-        # TODO: active learning with XGBoost
+        # active learning with XGBoost
+        else:
+            # get initial batch
+            X_init, y_init = map(lambda x: torch.cat(x, dim=0).numpy(), zip(self.learner.init_batch[:], self.learner.val_batch[:]))
+
+            # fit model to initial batch
+            self.model.train(X_init, y_init)
+
+            # test model and get results
+            X_test, y_test = map(lambda x: x.numpy(), self.dm.kemocon_test[:])
+            metr, cm = self.model.test(X_test, y_test)
+            counts = dict(self.learner._get_counts())
+
+            # save test results
+            results.update({
+                'metrics': [metr],
+                'counts': [counts],
+                'confmats': [cm.tolist()]
+            })
+            print(metr)
+            print(cm)
+
+            # get samples from a stream
+            for inp, tgt in self.learner.datastream:
+
+                # infer label
+                w = self.learner.infer(inp, use_torch=False)
+                p = 1 / (1 + np.exp(-w))
+                
+                # query if condition is met
+                if self.learner.query(w, p):
+                    self.learner.queried.append((inp.unsqueeze(0), tgt.unsqueeze(0)))
+
+                # if queried the update size number of samples
+                if len(self.learner.queried) >= self.learner.update_size:
+                    # update train + val & minority label
+                    # & reset queried samples buffer
+                    self.learner.update()
+
+                    # update model with queried samples
+                    X_train, y_train = self.learner.train_inp.numpy(), self.learner.train_tgt.numpy()
+                    self.model.train(X_train, y_train, model=self.model.bst)
+
+                    # test updated model
+                    metr, cm = self.model.test(X_test, y_test)
+                    counts = dict(self.learner._get_counts())
+
+                    # save results
+                    results['metrics'].append(metr)
+                    results['counts'].append(counts)
+                    results['confmats'].append(cm.tolist())
+                    print(metr)
+                    print(cm)
 
         return results
 
