@@ -3,14 +3,14 @@
         "seed": 1,
         "model": "xgboost",
         "type": "holdout",
-        "target": "valence",
+        "target": "arousal",
         "pos_label": "high",
         "savedir": "~/projects/AdaptiveESM/results",
         "tune": false
     },
     "data": {
         "data_dir": "~/data/kemocon/segments",
-        "load_dir": "~/data/kemocon/features/valence-60s.pkl",
+        "load_dir": "~/data/kemocon/features/arousal-60s.pkl",
         "save_dir": null,
         "batch_size": 2000,
         "label_type": "self",

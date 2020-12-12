@@ -14,8 +14,9 @@
             "gamma": 1,
             "alpha": 0.5,
             "beta": 0.5,
-            "update_lr": 0.0001,
-            "update_epochs": 500
+            "target_coverage": 0.5,
+            "update_lr": null,
+            "update_epochs": null
         }
     },
     "data": {

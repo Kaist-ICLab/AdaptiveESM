@@ -40,6 +40,7 @@ class ActiveLearner(object):
         self.gamma                  = config.gamma
         self.alpha                  = config.alpha
         self.beta                   = config.beta
+        self.target_coverage        = config.target_coverage
 
         self.update_lr              = config.update_lr
         self.update_epochs          = config.update_epochs
@@ -47,6 +48,7 @@ class ActiveLearner(object):
         self.model = model
         self.dm = datamodule
         self.queried = list()
+        self.coverage = 1  # initial coverage equals one
 
     def _get_counts(self, targets=None):
         if targets is None:
@@ -76,6 +78,9 @@ class ActiveLearner(object):
         self.full_size = len(full_data)
         init_size = round(self.full_size * self.init_ratio * (1 - self.val_ratio))
         val_size = round(self.full_size * self.init_ratio * self.val_ratio)
+
+        # initialize the number of queried samples
+        self.n_queried = init_size
 
         self.init_batch, self.val_batch, self.datastream = random_split(
             dataset     = full_data,
@@ -116,7 +121,12 @@ class ActiveLearner(object):
         q_m = 1 if self.model.classify(p) == self.minority else 0  # minority oversampling
         q = self.alpha * q_u + self.beta * q_m  # query probability
 
-        return np.random.binomial(1, q)  # query decision via binary sampling
+        # don't consider coverage if target_coverage is set to None,
+        # otherwise, always query if current coverage is lower than the target coverage
+        if (self.target_coverage is not None) and (self.coverage < self.target_coverage):
+            return 1
+        else:
+            return np.random.binomial(1, q)  # query decision via binomial sampling
 
     def update(self):
         # get queried samples and indices to update for train and valid
@@ -325,15 +335,19 @@ class Experiment(object):
             results.setdefault('cms', list()).append(cm.tolist())
 
             # now receive samples one by one from a stream
-            for inp, tgt in self.learner.stream_loader:
+            for i, (inp, tgt) in enumerate(self.learner.stream_loader):
 
                 # infer label
-                w = self.learner.infer(inp, use_torch=True).detach().cpu()
-                p = torch.sigmoid(w)
+                w = self.learner.infer(inp, use_torch=True).detach().cpu()  # logit odds
+                p = torch.sigmoid(w)  # estimated probability that the current sample is in class 'high'
 
                 # query if condition is met
                 if self.learner.query(w, p):
+                    self.learner.n_queried += 1
                     self.learner.queried.append((inp, tgt))  # add current sample to queried set
+                
+                # update the model coverage
+                self.learner.coverage = self.learner.n_queried / (len(self.learner.init_batch) + i + 1)
 
                 # if the number of queried samples is larger than the update size
                 if len(self.learner.queried) >= self.learner.update_size:
@@ -395,7 +409,7 @@ class Experiment(object):
             print(cm)
 
             # get samples from a stream
-            for inp, tgt in self.learner.datastream:
+            for i, (inp, tgt) in enumerate(self.learner.datastream):
 
                 # infer label
                 w = self.learner.infer(inp, use_torch=False)
@@ -403,7 +417,11 @@ class Experiment(object):
                 
                 # query if condition is met
                 if self.learner.query(w, p):
+                    self.learner.n_queried += 1
                     self.learner.queried.append((inp.unsqueeze(0), tgt.unsqueeze(0)))
+
+                # update model covera
+                self.learner.coverage = self.learner.n_queried / (len(self.learner.init_batch) + i + 1)
 
                 # if queried the update size number of samples
                 if len(self.learner.queried) >= self.learner.update_size:
