@@ -10,6 +10,7 @@ from pytorch_lightning.core.decorators import auto_move_data
 
 from torch import nn
 from torch.utils.data import DataLoader, random_split
+from torch.distributions.bernoulli import Bernoulli
 
 from sklearn.metrics import accuracy_score, average_precision_score, f1_score, roc_auc_score, confusion_matrix
 from utils import get_config
@@ -45,18 +46,28 @@ class LSTM(pl.LightningModule):
         logits = self.fc(out)[:, -1]  # if batch_first=True
         return logits
 
+    def classify(self, p):
+        be = Bernoulli(torch.tensor([0.5]))
+        if p < 0.5:
+            return 0
+        elif p > 0.5:
+            return 1
+        else:
+            return be.sample()
+
     def log_metrics(self, loss, logits, y, stage):
         # see https://discuss.pytorch.org/t/should-it-really-be-necessary-to-do-var-detach-cpu-numpy/35489
         # and https://stackoverflow.com/questions/63582590/why-do-we-call-detach-before-calling-numpy-on-a-pytorch-tensor
         # for converting tensors to numpy for calculating metrics
         # https://pytorch-lightning.readthedocs.io/en/latest/performance.html
         probas = torch.sigmoid(logits).detach().cpu().numpy()
+        preds = torch.tensor(list(map(lambda p: self.classify(p), probas)))
         y = y.detach().cpu().numpy()
 
         # for the choice of metrics, see https://neptune.ai/blog/f1-score-accuracy-roc-auc-pr-auc
-        acc = accuracy_score(y, probas > 0.5)
+        acc = accuracy_score(y, preds)
         ap = average_precision_score(y, probas, average='weighted', pos_label=1)
-        f1 = f1_score(y, probas > 0.5, average='weighted', pos_label=1)
+        f1 = f1_score(y, preds, average='weighted', pos_label=1)
         auroc = roc_auc_score(y, probas, average='weighted')
 
         # converting scalars to tensors to prevent errors
@@ -70,7 +81,7 @@ class LSTM(pl.LightningModule):
         }, on_step=False, on_epoch=True, logger=True)
 
         if stage == 'test':
-            cm = confusion_matrix(y, probas > 0.5, normalize=None)
+            cm = confusion_matrix(y, preds, normalize=None)
             return cm
 
     def training_step(self, batch, batch_idx):
@@ -290,17 +301,30 @@ class XGBoost(object):
     def __init__(self, hparams):
         self.hparams = hparams
 
-    def train(self, x, y):
-        self.dtrain = DMatrix(x, label=y)
-        self.bst = xgb.train(vars(self.hparams.bst), self.dtrain, self.hparams.num_rounds)
+    def train(self, x, y, model=None):
+        self.bst = xgb.train(
+            params          = vars(self.hparams.bst),
+            dtrain          = DMatrix(x, label=y),
+            num_boost_round = self.hparams.num_rounds,
+            xgb_model       = model
+        )
 
     def predict(self, x):
-        probs = self.bst.predict(DMatrix(x))
-        preds = probs > self.hparams.threshold
-        return probs, preds
+        logits = self.bst.predict(DMatrix(x))
+        return logits
+
+    def classify(self, p):
+        if p < 0.5:
+            return 0
+        elif p > 0.5:
+            return 1
+        else:
+            return np.random.binomial(1, 0.5)
 
     def test(self, x, y):
-        probs, preds = self.predict(x)
+        logits = self.predict(x)
+        probs = 1 / (1 + np.exp(-logits))  # apply sigmoid to get probabilities
+        preds = list(map(lambda p: self.classify(p), probs))
 
         # get metrics
         acc = accuracy_score(y, preds)

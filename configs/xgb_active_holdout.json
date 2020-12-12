@@ -2,11 +2,22 @@
     "exp": {
         "seed": 1,
         "model": "xgboost",
-        "type": "holdout",
+        "type": "active-holdout",
         "target": "arousal",
         "pos_label": "high",
         "savedir": "~/projects/AdaptiveESM/results",
-        "tune": false
+        "tune": false,
+        "active_learning": {
+            "init_ratio": 0.1,
+            "val_ratio": 0,
+            "update_ratio": 0.01,
+            "gamma": 1,
+            "alpha": 0.5,
+            "beta": 0.5,
+            "target_coverage": 0.5,
+            "update_lr": null,
+            "update_epochs": null
+        }
     },
     "data": {
         "data_dir": "~/data/kemocon/segments",
@@ -20,7 +31,7 @@
         "resample": false,
         "extract_features": true,
         "standardize": true,
-        "fusion": "stack"
+        "fusion": null
     },
     "trainer": null,
     "hparams": {
