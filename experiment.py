@@ -35,6 +35,7 @@ class ActiveLearner(object):
         self.init_ratio             = config.init_ratio
         self.val_ratio              = config.val_ratio
         self.update_ratio           = config.update_ratio
+        self.rebuild                = config.rebuild
 
         self.decision_boundary      = model.hparams.threshold if isinstance(model, XGBoost) else config.decision_boundary
         self.gamma                  = config.gamma
@@ -294,13 +295,18 @@ class Experiment(object):
             if self.config.logger is not None:
                 logger = self.init_logger(pid)
 
-            # init lr monitor and checkpoint callback
+            # init early stopping
             callbacks = list()
+            if self.config.early_stop is not None:
+                earlystop_callback = EarlyStopping(**vars(self.config.early_stop))
+                callbacks.append(earlystop_callback)
+
+            # init checkpoint callback
             if self.learner.val_ratio > 0:
                 checkpoint_callback = ModelCheckpoint(
-                    monitor     = 'valid_loss',
+                    monitor     = self.config.early_stop.monitor,
                     save_last   = True,
-                    mode        = 'min',
+                    mode        = self.config.early_stop.mode,
                 )
                 callbacks.append(checkpoint_callback)
 
@@ -312,22 +318,38 @@ class Experiment(object):
             })
             trainer = pl.Trainer(**trainer_args)
 
+            # find optimal lr
+            if self.config.exp.tune:
+                trainer.auto_lr_find = True
+                trainer.tune(
+                    model               = self.learner.model,
+                    train_dataloader    = self.learner.init_loader,
+                    val_dataloaders     = self.learner.val_loader
+                )
+
             # fit model to initial batch
             trainer.fit(
-                model               = self.model,
+                model               = self.learner.model,
                 train_dataloader    = self.learner.init_loader,
                 val_dataloaders     = self.learner.val_loader
             )
             
             # test model and get results
+            # self.learner.model = self.init_model(self.config.hparams).load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
             [metr] = trainer.test(
-                model               = self.model,
+                model               = self.learner.model,
                 test_dataloaders    = self.dm.test_dataloader()
             )
             counts = dict(self.learner._get_counts())
-            cm = self.model.cm
-            print(trainer.checkpoint_callback.best_model_path)
+            cm = self.learner.model.cm
+            # print(earlystop_callback.best_score)
+            # print(trainer.checkpoint_callback.best_model_path)
             print(cm)
+
+            # reset early stopping
+            trainer.should_stop = False
+            earlystop_callback.wait_count = 0
+            # earlystop_callback.stopped_epoch = 0
             
             # log test results for the initial batch
             results.setdefault('metrics', list()).append(metr)
@@ -353,31 +375,53 @@ class Experiment(object):
                 if len(self.learner.queried) >= self.learner.update_size:
                     self.learner.update()  # update active learner
 
-                    # reload model from the last best checkpoint if we are training with validation set
-                    if self.learner.val_loader is not None:
-                        self.model = self.model.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
+                    # rebuild model from scratch
+                    if self.learner.rebuild:
+                        self.learner.model = self.init_model(self.config.hparams)
+                    # or incrementally update existing model
+                    # reload model from the last best checkpoint if there is a validation set
+                    elif self.learner.val_loader is not None:
+                        self.learner.model = self.learner.model.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
 
                     # update model to use a different learning rate for learning from datastream
-                    if self.learner.update_lr is not None:
-                        self.model.hparams.learning_rate = self.learner.update_lr
+                    if self.learner.update_lr is not None and not self.config.exp.tune:
+                        self.learner.model.hparams.learning_rate = self.learner.update_lr
+
+                    # increment the number of maximum training epochs
+                    trainer.max_epochs += self.learner.update_epochs
+
+                    # # find optimal lr
+                    # if self.config.exp.tune:
+                    #     trainer.tune(
+                    #         model               = self.learner.model,
+                    #         train_dataloader    = self.learner.train_loader,
+                    #         val_dataloaders     = self.learner.val_loader
+                    #     )
 
                     # re-fit model to the new trainset
-                    trainer.max_epochs += self.learner.update_epochs
                     trainer.fit(
-                        model               = self.model,
+                        model               = self.learner.model,
                         train_dataloader    = self.learner.train_loader,
                         val_dataloaders     = self.learner.val_loader
                     )
                     
                     # test fitted model again on test set
+                    # self.learner.model = self.init_model(self.config.hparams).load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
                     [metr] = trainer.test(
-                        model               = self.model,
+                        model               = self.learner.model,
                         test_dataloaders    = self.dm.test_dataloader()
                     )
                     counts = dict(self.learner._get_counts())
-                    cm = self.model.cm
-                    print(trainer.checkpoint_callback.best_model_path)
+                    cm = self.learner.model.cm
+                    # print(earlystop_callback.best_score)
+                    # print(trainer.checkpoint_callback.best_model_path)
                     print(cm)
+
+                    # reset early stopping
+                    trainer.should_stop = False
+                    earlystop_callback.wait_count = 0
+                    # earlystop_callback.stopped_epoch = 0
+                    # earlystop_callback.based_on_eval_results = False
 
                     # log test results
                     results['metrics'].append(metr)
@@ -392,11 +436,12 @@ class Experiment(object):
             X_init, y_init = map(lambda x: torch.cat(x, dim=0).numpy(), zip(self.learner.init_batch[:], self.learner.val_batch[:]))
 
             # fit model to initial batch
-            self.model.train(X_init, y_init)
+            self.learner.model.train(X_init, y_init)
+            # self.model.train(X_init, y_init)
 
             # test model and get results
             X_test, y_test = map(lambda x: x.numpy(), self.dm.kemocon_test[:])
-            metr, cm = self.model.test(X_test, y_test)
+            metr, cm = self.learner.model.test(X_test, y_test)
             counts = dict(self.learner._get_counts())
 
             # save test results
@@ -407,6 +452,13 @@ class Experiment(object):
             })
             print(metr)
             print(cm)
+
+            ## update xgb parameters before learning from the stream
+            # vars(self.learner.model.hparams.bst).update({
+            #     'process_type': 'update',
+            #     'updater': 'refresh,prune',
+            #     'refresh_leaf': True
+            # })
 
             # get samples from a stream
             for i, (inp, tgt) in enumerate(self.learner.datastream):
@@ -431,10 +483,17 @@ class Experiment(object):
 
                     # update model with queried samples
                     X_train, y_train = self.learner.train_inp.numpy(), self.learner.train_tgt.numpy()
-                    self.model.train(X_train, y_train, model=self.model.bst)
+
+                    # rebuild model from scratch
+                    if self.learner.rebuild:
+                        self.learner.model = self.init_model(self.config.hparams)
+                        self.learner.model.train(X_train, y_train)
+                    # or incrementally update existing model
+                    else:
+                        self.learner.model.train(X_train, y_train, model=self.learner.model.bst)
 
                     # test updated model
-                    metr, cm = self.model.test(X_test, y_test)
+                    metr, cm = self.learner.model.test(X_test, y_test)
                     counts = dict(self.learner._get_counts())
 
                     # save results

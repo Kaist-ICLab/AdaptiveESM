@@ -5,16 +5,17 @@
         "type": "active-holdout",
         "target": "arousal",
         "pos_label": "high",
-        "savedir": "~/projects/AdaptiveESM/results",
+        "savedir": "~/projects/AdaptiveESM/results/ab/arousal/c80/1",
         "tune": false,
         "active_learning": {
             "init_ratio": 0.1,
             "val_ratio": 0,
             "update_ratio": 0.01,
-            "gamma": 1,
+            "rebuild": true,
+            "gamma": 10,
             "alpha": 0.5,
             "beta": 0.5,
-            "target_coverage": 0.5,
+            "target_coverage": null,
             "update_lr": null,
             "update_epochs": null
         }

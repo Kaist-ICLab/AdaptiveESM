@@ -1,6 +1,6 @@
 {   
     "logger": {
-        "logdir": "./logs"
+        "logdir": "./logs/lstm-active"
     },
     "exp": {
         "seed": 1,
@@ -8,18 +8,20 @@
         "type": "active-holdout",
         "target": "arousal",
         "pos_label": "high",
-        "savedir": "~/projects/AdaptiveESM/results",
+        "savedir": "~/projects/AdaptiveESM/results/lstm-active",
         "tune": false,
         "active_learning": {
             "init_ratio": 0.1,
             "val_ratio": 0.2,
-            "update_ratio": 0.02,
+            "update_ratio": 0.01,
+            "rebuild": false,
             "gamma": 1,
             "alpha": 0.5,
             "beta": 0.5,
+            "target_coverage": null,
             "decision_boundary": 0.5,
-            "update_lr": 0.0001,
-            "update_epochs": 100
+            "update_lr": 0.00009,
+            "update_epochs": 1000
         }
     },
     "data": {
@@ -30,7 +32,7 @@
         "label_type": "self",
         "n_classes": 2,
         "val_size": 0.1,
-        "num_segs": 5,
+        "num_segs": 12,
         "resample": true,
         "extract_features": false,
         "standardize": true,
@@ -39,16 +41,16 @@
     "early_stop": {
         "monitor": "valid_loss",
         "min_delta": 0.0,
-        "patience": 100,
+        "patience": 1000,
         "verbose": true,
         "mode": "min"
     },
     "trainer": {
-        "gpus": [1],
+        "gpus": 1,
         "auto_select_gpus": false,
         "precision": 16,
         "deterministic": true,
-        "max_epochs": 100,
+        "max_epochs": 10000,
         "gradient_clip_val": 0.2
     },
     "hparams": {
@@ -58,7 +60,7 @@
         "n_layers": 2,
         "p_drop": 0.2,
         "bidirectional": true,
-        "learning_rate": 0.0001,
+        "learning_rate": 0.00002,
         "scheduler": null
     }
 }
