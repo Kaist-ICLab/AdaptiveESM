@@ -1,27 +1,25 @@
 {   
     "logger": {
-        "type": "tensorboard",
-        "api_key": null,
-        "workspace": "cheulyop",
-        "logdir": "./logs",
-        "project_name": "adaptiveesm"
+        "logdir": "./logs"
     },
     "exp": {
         "seed": 1,
         "model": "lstm",
         "type": "holdout",
-        "target": "arousal",
+        "target": "valence",
         "pos_label": "high",
-        "savedir": "~/projects/AdaptiveESM/results",
+        "savedir": "~/projects/AdaptiveESM/results/input_size/valence",
         "tune": false
     },
     "data": {
         "data_dir": "~/data/kemocon/segments",
+        "load_dir": null,
+        "save_dir": null,
         "batch_size": 2000,
         "label_type": "self",
         "n_classes": 2,
-        "val_size": 0.2,
-        "num_segs": 12,
+        "val_size": 0.1,
+        "num_segs": 36,
         "resample": true,
         "extract_features": false,
         "standardize": true,

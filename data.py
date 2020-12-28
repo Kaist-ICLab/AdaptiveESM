@@ -4,6 +4,7 @@ import pickle
 import warnings
 import numpy as np
 from tqdm import tqdm
+from argparse import Namespace
 
 from scipy.signal import decimate
 from scipy.interpolate import interp1d
@@ -64,7 +65,7 @@ class KEMOCONDataModule(pl.LightningDataModule):
 
     def prepare_data(self, check_id=False):
         # load previously processed segments from load_dir
-        if self.load_dir is not None:
+        if not check_id and self.load_dir is not None:
             with open(self.load_dir, 'rb') as handle:
                 processed = pickle.load(handle)
             print(f'Loaded processed segments from {self.load_dir}.')
@@ -116,7 +117,7 @@ class KEMOCONDataModule(pl.LightningDataModule):
 
             # check label distribution: if the number of unique classes for the current participant does not equal n_classes,
             # remove current participant from the dataset as such participant's data cannot be used for testing
-            if len(Counter(map(lambda x: x[-1], segments))) != self.n_classes:
+            if self.label_fn is not None and len(Counter(map(lambda x: x[-1], segments))) != self.n_classes:
                 del pid_to_segments[pid]
                 continue
             
@@ -186,7 +187,7 @@ class KEMOCONDataModule(pl.LightningDataModule):
         processed = OrderedDict(sorted(pid_to_segments.items(), key=lambda x: x[0]))
 
         # pickle processed segments to save_dir
-        if self.save_dir is not None:
+        if not check_id and self.save_dir is not None:
             with open(self.save_dir, 'wb') as handle:
                 pickle.dump(processed, handle, protocol=pickle.HIGHEST_PROTOCOL)
             print(f'Saved processed segments to {self.save_dir}.')
@@ -256,3 +257,26 @@ class KEMOCONDataModule(pl.LightningDataModule):
         return TensorDataset(
             *map(lambda x: torch.cat(x, dim=0), zip(self.kemocon_train[:], self.kemocon_val[:]))
         )
+
+
+# run as a script to save extracted features
+if __name__ == "__main__":
+    config = {
+        "data_dir": "~/data/kemocon/segments",
+        "load_dir": None,
+        "save_dir": "~/data/kemocon/features/av60.pkl",
+        "batch_size": 2000,
+        "label_type": "self",
+        "n_classes": 2,
+        "val_size": 0.1,
+        "num_segs": 12,
+        "resample": False,
+        "extract_features": True,
+        "standardize": True,
+        "fusion": None,
+    }
+
+    KEMOCONDataModule(
+        config      = Namespace(**config),
+        label_fn    = None,
+    ).prepare_data()
